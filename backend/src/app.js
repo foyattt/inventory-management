@@ -7,9 +7,10 @@ const morgan = require('morgan');
 const env = require('./config/env');
 const { notFoundHandler, errorHandler } = require('./middleware/error.middleware');
 
-// Import routes (will be added in later parts)
+// ───── Import Routes ─────
 const authRoutes = require('./modules/auth/auth.routes');
-// const inventoryRoutes = require('./modules/inventory/inventory.routes');
+const inventoryRoutes = require('./modules/inventory/inventory.routes');
+// Future routes (uncomment when ready)
 // const posRoutes = require('./modules/pos/pos.routes');
 // const customerRoutes = require('./modules/customers/customers.routes');
 // const creditRoutes = require('./modules/credit/credit.routes');
@@ -47,7 +48,9 @@ app.get('/health', (req, res) => {
 
 // ───── API Routes ─────
 app.use('/api/auth', authRoutes);
-// app.use('/api/inventory', inventoryRoutes);
+app.use('/api/inventory', inventoryRoutes);
+
+// Future routes (uncomment when modules are ready)
 // app.use('/api/pos', posRoutes);
 // app.use('/api/customers', customerRoutes);
 // app.use('/api/credit', creditRoutes);
