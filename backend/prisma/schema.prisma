@@ -1,0 +1,436 @@
+// backend/src/prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  ACCOUNTANT
+  INVENTORY_STAFF
+  MANAGER
+}
+
+enum CustomerType {
+  INDIVIDUAL
+  COMPANY
+}
+
+enum StockSourceType {
+  IMPORTED
+  LOCAL
+}
+
+enum StockMovementType {
+  RECEIPT
+  SALE
+  ADJUSTMENT
+  REVERSAL
+  RETURN
+}
+
+enum PaymentMethod {
+  CASH
+  CREDIT
+}
+
+enum TransactionStatus {
+  DRAFT
+  COMPLETED
+  CANCELLED
+  REVERSED
+}
+
+enum ReconciliationStatus {
+  MATCHED
+  QUANTITY_MISMATCH
+  PRICE_MISMATCH
+  TAX_OR_TOTAL_MISMATCH
+  MISSING_FROM_GATE_PASS
+  MISSING_FROM_INVOICE
+  NEEDS_REVIEW
+  REVIEWED
+}
+
+enum CreditStatus {
+  WITHIN_LIMIT
+  NEAR_LIMIT
+  OVER_LIMIT
+  DUE_SOON
+  OVERDUE
+  SETTLED
+}
+
+enum AccountName {
+  Zesino
+  Aleme
+  alem
+  Yirzemu
+}
+
+enum BankName {
+  Awash
+  Abyssinia
+  CBE
+  Oromia_Cooperative_Bank
+  Dashen
+  Hibret
+  Zemen
+}
+
+// ─────────────────────────────────────────────────────────────
+// AUTH & USERS
+// ─────────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  fullName      String
+  role          Role      @default(ACCOUNTANT)
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  createdTransactions    SaleTransaction[]      @relation("CreatedBy")
+  stockMovements         StockMovement[]
+  reconciliationReviews  ReconciliationReview[]
+  paymentsEntered        Payment[]              @relation("EnteredBy")
+  auditEvents            AuditEvent[]
+  creditOverrides        CreditLedger[]         @relation("OverriddenBy")
+
+  @@index([email])
+  @@index([role])
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────────
+// PRODUCTS & INVENTORY
+// ─────────────────────────────────────────────────────────────
+
+model Product {
+  id              String   @id @default(cuid())
+  internalCode    String   @unique
+  name            String
+  description     String?
+  category        String?
+  unitOfMeasure   String   @default("PCS")
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  stockSources    StockSource[]
+  stockMovements  StockMovement[]
+  gatePassLines   GatePassLine[]
+  invoiceLines    InvoiceLine[]
+
+  @@index([internalCode])
+  @@index([name])
+  @@index([isActive])
+  @@map("products")
+}
+
+model StockSource {
+  id              String          @id @default(cuid())
+  productId       String
+  sourceType      StockSourceType
+  batchCode       String
+  supplierRef     String?
+  receiptDate     DateTime
+  receivedQty     Decimal         @db.Decimal(18, 4)
+  currentBalance  Decimal         @db.Decimal(18, 4)
+  unitCost        Decimal?        @db.Decimal(18, 4)
+  notes           String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  // Relations
+  product         Product         @relation(fields: [productId], references: [id])
+  stockMovements  StockMovement[]
+  gatePassLines   GatePassLine[]
+
+  @@unique([productId, batchCode])
+  @@index([productId])
+  @@index([sourceType])
+  @@index([batchCode])
+  @@map("stock_sources")
+}
+
+model StockMovement {
+  id              String            @id @default(cuid())
+  productId       String
+  stockSourceId   String?
+  movementType    StockMovementType
+  quantity        Decimal           @db.Decimal(18, 4) // positive = in, negative = out
+  referenceType   String?
+  referenceId     String?
+  reason          String?
+  performedById   String
+  createdAt       DateTime          @default(now())
+
+  // Relations
+  product         Product           @relation(fields: [productId], references: [id])
+  stockSource     StockSource?      @relation(fields: [stockSourceId], references: [id])
+  performedBy     User              @relation(fields: [performedById], references: [id])
+
+  @@index([productId])
+  @@index([stockSourceId])
+  @@index([movementType])
+  @@index([referenceId])
+  @@index([createdAt])
+  @@map("stock_movements")
+}
+
+// ─────────────────────────────────────────────────────────────
+// CUSTOMERS
+// ─────────────────────────────────────────────────────────────
+
+model Customer {
+  id              String       @id @default(cuid())
+  customerType    CustomerType
+  name            String
+  tinNo           String?
+  phone           String?
+  email           String?
+  address         String?
+  creditLimit     Decimal      @default(0) @db.Decimal(18, 2)
+  creditPeriodDays Int         @default(30)
+  isActive        Boolean      @default(true)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  // Relations
+  saleTransactions SaleTransaction[]
+  creditLedgers    CreditLedger[]
+  payments         Payment[]
+
+  @@index([name])
+  @@index([tinNo])
+  @@index([isActive])
+  @@map("customers")
+}
+
+// ─────────────────────────────────────────────────────────────
+// POS / SALE TRANSACTIONS
+// ─────────────────────────────────────────────────────────────
+
+model SaleTransaction {
+  id                    String            @id @default(cuid())
+  gatePassNo            String            @unique
+  fsNo                  String            @unique
+  customerId            String
+  paymentMethod         PaymentMethod
+  status                TransactionStatus @default(COMPLETED)
+  transactionDate       DateTime          @default(now())
+
+  // Gate Pass totals
+  gatePassSubtotal      Decimal           @db.Decimal(18, 2)
+  gatePassTaxAmount     Decimal           @db.Decimal(18, 2)
+  gatePassTotal         Decimal           @db.Decimal(18, 2)
+
+  // Invoice totals
+  invoiceSubtotal       Decimal           @db.Decimal(18, 2)
+  invoiceTaxAmount      Decimal           @db.Decimal(18, 2)
+  invoiceTotal          Decimal           @db.Decimal(18, 2)
+
+  taxRate               Decimal           @default(15.00) @db.Decimal(5, 2)
+  notes                 String?
+  createdById           String
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  // Relations
+  customer              Customer          @relation(fields: [customerId], references: [id])
+  createdBy             User              @relation("CreatedBy", fields: [createdById], references: [id])
+  gatePassLines         GatePassLine[]
+  invoiceLines          InvoiceLine[]
+  depositAllocations    DepositAllocation[]
+  creditLedgers         CreditLedger[]
+  reconciliationReviews ReconciliationReview[]
+
+  @@index([gatePassNo])
+  @@index([fsNo])
+  @@index([customerId])
+  @@index([transactionDate])
+  @@index([status])
+  @@map("sale_transactions")
+}
+
+model GatePassLine {
+  id                String          @id @default(cuid())
+  saleTransactionId String
+  productId         String
+  stockSourceId     String?
+  quantity          Decimal         @db.Decimal(18, 4)
+  unitPrice         Decimal         @db.Decimal(18, 2)
+  lineSubtotal      Decimal         @db.Decimal(18, 2)
+  createdAt         DateTime        @default(now())
+
+  // Relations
+  saleTransaction   SaleTransaction @relation(fields: [saleTransactionId], references: [id], onDelete: Cascade)
+  product           Product         @relation(fields: [productId], references: [id])
+  stockSource       StockSource?    @relation(fields: [stockSourceId], references: [id])
+
+  @@index([saleTransactionId])
+  @@index([productId])
+  @@map("gate_pass_lines")
+}
+
+model InvoiceLine {
+  id                String          @id @default(cuid())
+  saleTransactionId String
+  productId         String
+  quantity          Decimal         @db.Decimal(18, 4)
+  unitPrice         Decimal         @db.Decimal(18, 2)
+  lineSubtotal      Decimal         @db.Decimal(18, 2)
+  createdAt         DateTime        @default(now())
+
+  // Relations
+  saleTransaction   SaleTransaction @relation(fields: [saleTransactionId], references: [id], onDelete: Cascade)
+  product           Product         @relation(fields: [productId], references: [id])
+
+  @@index([saleTransactionId])
+  @@index([productId])
+  @@map("invoice_lines")
+}
+
+model DepositAllocation {
+  id                String          @id @default(cuid())
+  saleTransactionId String
+  accountName       AccountName
+  bankName          BankName
+  amount            Decimal         @db.Decimal(18, 2)
+  createdAt         DateTime        @default(now())
+
+  // Relations
+  saleTransaction   SaleTransaction @relation(fields: [saleTransactionId], references: [id], onDelete: Cascade)
+
+  @@index([saleTransactionId])
+  @@map("deposit_allocations")
+}
+
+// ─────────────────────────────────────────────────────────────
+// CREDIT & PAYMENTS
+// ─────────────────────────────────────────────────────────────
+
+model CreditLedger {
+  id                String       @id @default(cuid())
+  customerId        String
+  saleTransactionId String?
+  debitAmount       Decimal      @default(0) @db.Decimal(18, 2) // increases outstanding
+  creditAmount      Decimal      @default(0) @db.Decimal(18, 2) // decreases outstanding (payments)
+  dueDate           DateTime?
+  status            CreditStatus @default(WITHIN_LIMIT)
+  notes             String?
+  overriddenById    String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  // Relations
+  customer          Customer         @relation(fields: [customerId], references: [id])
+  saleTransaction   SaleTransaction? @relation(fields: [saleTransactionId], references: [id])
+  overriddenBy      User?            @relation("OverriddenBy", fields: [overriddenById], references: [id])
+  payments          Payment[]
+
+  @@index([customerId])
+  @@index([saleTransactionId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("credit_ledgers")
+}
+
+model Payment {
+  id              String        @id @default(cuid())
+  customerId      String
+  creditLedgerId  String?
+  amount          Decimal       @db.Decimal(18, 2)
+  paymentDate     DateTime      @default(now())
+  reference       String?
+  accountName     AccountName?
+  bankName        BankName?
+  notes           String?
+  enteredById     String
+  createdAt       DateTime      @default(now())
+
+  // Relations
+  customer        Customer      @relation(fields: [customerId], references: [id])
+  creditLedger    CreditLedger? @relation(fields: [creditLedgerId], references: [id])
+  enteredBy       User          @relation("EnteredBy", fields: [enteredById], references: [id])
+
+  @@index([customerId])
+  @@index([creditLedgerId])
+  @@index([paymentDate])
+  @@map("payments")
+}
+
+// ─────────────────────────────────────────────────────────────
+// RECONCILIATION
+// ─────────────────────────────────────────────────────────────
+
+model ReconciliationReview {
+  id                String               @id @default(cuid())
+  saleTransactionId String
+  status            ReconciliationStatus @default(NEEDS_REVIEW)
+  differencesSnapshot Json?              // stores the comparison result
+  notes             String?
+  reviewedById      String?
+  reviewedAt        DateTime?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  // Relations
+  saleTransaction   SaleTransaction      @relation(fields: [saleTransactionId], references: [id], onDelete: Cascade)
+  reviewedBy        User?                @relation(fields: [reviewedById], references: [id])
+
+  @@index([saleTransactionId])
+  @@index([status])
+  @@map("reconciliation_reviews")
+}
+
+// ─────────────────────────────────────────────────────────────
+// AUDIT & SYSTEM
+// ─────────────────────────────────────────────────────────────
+
+model AuditEvent {
+  id          String   @id @default(cuid())
+  actorId     String?
+  action      String
+  entityType  String
+  entityId    String?
+  oldValues   Json?
+  newValues   Json?
+  reason      String?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  // Relations
+  actor       User?    @relation(fields: [actorId], references: [id])
+
+  @@index([actorId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_events")
+}
+
+model SystemSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("system_settings")
+}
