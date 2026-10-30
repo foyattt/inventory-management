@@ -2,7 +2,7 @@
 
 const express = require('express');
 const creditController = require('./credit.controller');
-const { authenticate } = require('../auth/auth.middleware');
+const { authenticate } = require('../../middleware/auth.middleware');
 const { authorize } = require('../../middleware/role.middleware');
 
 const router = express.Router();
