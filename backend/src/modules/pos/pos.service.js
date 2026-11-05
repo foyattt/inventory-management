@@ -1,11 +1,15 @@
 // backend/src/modules/pos/pos.service.js
 
 const prisma = require('../../prisma/client');
+const { Prisma } = require('@prisma/client');
 const { AppError } = require('../../middleware/error.middleware');
 const { calculateTotals } = require('../../utils/tax.calculator');
+const { paginate } = require('../../utils/helpers');
+const { toMoneyString } = require('../../utils/money');
 const gatePassService = require('./gate-pass.service');
 const invoiceService = require('./invoice.service');
 const depositService = require('./deposit.service');
+const settingsService = require('../settings/settings.service');
 
 class PosService {
   async createTransaction(data, userId) {
@@ -20,7 +24,6 @@ class PosService {
       notes,
     } = data;
 
-    // Basic validation
     if (!gatePassNo || !fsNo) {
       throw new AppError('Gate Pass No and FS No are required', 400);
     }
@@ -34,7 +37,6 @@ class PosService {
       throw new AppError('At least one Gate Pass item is required', 400);
     }
 
-    // Check unique document numbers
     const existingGP = await prisma.saleTransaction.findUnique({ where: { gatePassNo } });
     if (existingGP) {
       throw new AppError('Gate Pass No already exists', 409);
@@ -45,92 +47,90 @@ class PosService {
       throw new AppError('FS No already exists', 409);
     }
 
-    // Check customer
     const customer = await prisma.customer.findUnique({ where: { id: customerId } });
     if (!customer) {
       throw new AppError('Customer not found', 404);
     }
 
-    // Calculate totals
-    const gatePassTotals = calculateTotals(gatePassItems);
-    const invoiceTotals = calculateTotals(invoiceItems);
+    const taxRate = await settingsService.getTaxRate();
+    const gatePassTotals = calculateTotals(gatePassItems, taxRate);
+    const invoiceTotals = calculateTotals(invoiceItems, taxRate);
 
-    // Atomic transaction
-    const result = await prisma.$transaction(async (tx) => {
-      // 1. Create Sale Transaction
-      const saleTransaction = await tx.saleTransaction.create({
-        data: {
-          gatePassNo,
-          fsNo,
-          customerId,
-          paymentMethod,
-          status: 'COMPLETED',
-          gatePassSubtotal: gatePassTotals.subtotal,
-          gatePassTaxAmount: gatePassTotals.taxAmount,
-          gatePassTotal: gatePassTotals.total,
-          invoiceSubtotal: invoiceTotals.subtotal,
-          invoiceTaxAmount: invoiceTotals.taxAmount,
-          invoiceTotal: invoiceTotals.total,
-          taxRate: gatePassTotals.taxRate,
-          notes,
-          createdById: userId,
-        },
-      });
-
-      // 2. Create Gate Pass lines + deduct stock
-      await gatePassService.createGatePassLines(
-        tx,
-        saleTransaction.id,
-        gatePassItems,
-        userId
-      );
-
-      // 3. Create Invoice lines (no stock effect)
-      if (invoiceItems.length > 0) {
-        await invoiceService.createInvoiceLines(tx, saleTransaction.id, invoiceItems);
-      }
-
-      // 4. Handle payment
-      if (paymentMethod === 'CASH') {
-        await depositService.createDepositAllocations(
-          tx,
-          saleTransaction.id,
-          depositAllocations,
-          gatePassTotals.total
-        );
-      }
-
-      if (paymentMethod === 'CREDIT') {
-        // Create credit ledger entry
-        const dueDate = new Date();
-        dueDate.setDate(dueDate.getDate() + (customer.creditPeriodDays || 30));
-
-        await tx.creditLedger.create({
+    const result = await prisma.$transaction(
+      async (tx) => {
+        const saleTransaction = await tx.saleTransaction.create({
           data: {
+            gatePassNo,
+            fsNo,
             customerId,
-            saleTransactionId: saleTransaction.id,
-            debitAmount: gatePassTotals.total,
-            dueDate,
-            status: 'WITHIN_LIMIT',
+            paymentMethod,
+            status: 'COMPLETED',
+            gatePassSubtotal: gatePassTotals.subtotal,
+            gatePassTaxAmount: gatePassTotals.taxAmount,
+            gatePassTotal: gatePassTotals.total,
+            invoiceSubtotal: invoiceTotals.subtotal,
+            invoiceTaxAmount: invoiceTotals.taxAmount,
+            invoiceTotal: invoiceTotals.total,
+            taxRate: toMoneyString(taxRate),
+            notes,
+            createdById: userId,
           },
         });
-      }
 
-      // Return full transaction
-      return tx.saleTransaction.findUnique({
-        where: { id: saleTransaction.id },
-        include: {
-          customer: true,
-          gatePassLines: { include: { product: true } },
-          invoiceLines: { include: { product: true } },
-          depositAllocations: true,
-          creditLedgers: true,
-          createdBy: {
-            select: { id: true, fullName: true, email: true },
+        await gatePassService.createGatePassLines(
+          tx,
+          saleTransaction.id,
+          gatePassItems,
+          userId
+        );
+
+        if (invoiceItems.length > 0) {
+          await invoiceService.createInvoiceLines(tx, saleTransaction.id, invoiceItems);
+        }
+
+        if (paymentMethod === 'CASH') {
+          await depositService.createDepositAllocations(
+            tx,
+            saleTransaction.id,
+            depositAllocations,
+            gatePassTotals.total
+          );
+        }
+
+        if (paymentMethod === 'CREDIT') {
+          const dueDate = new Date();
+          dueDate.setDate(dueDate.getDate() + (customer.creditPeriodDays || 30));
+
+          await tx.creditLedger.create({
+            data: {
+              customerId,
+              saleTransactionId: saleTransaction.id,
+              debitAmount: gatePassTotals.total,
+              dueDate,
+              status: 'WITHIN_LIMIT',
+            },
+          });
+        }
+
+        return tx.saleTransaction.findUnique({
+          where: { id: saleTransaction.id },
+          include: {
+            customer: true,
+            gatePassLines: { include: { product: true } },
+            invoiceLines: { include: { product: true } },
+            depositAllocations: true,
+            creditLedgers: true,
+            createdBy: {
+              select: { id: true, fullName: true, email: true },
+            },
           },
-        },
-      });
-    });
+        });
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+        timeout: 20000,
+      }
+    );
 
     return result;
   }
@@ -157,12 +157,40 @@ class PosService {
     return transaction;
   }
 
-  async getTransactions({ page = 1, limit = 20, customerId, paymentMethod }) {
-    const skip = (page - 1) * limit;
+  async getTransactions({
+    page = 1,
+    limit = 20,
+    customerId,
+    paymentMethod,
+    status,
+    search,
+    dateFrom,
+    dateTo,
+  }) {
+    const { skip, take, page: pageNum, limit: limitNum } = paginate(page, limit);
     const where = {};
 
     if (customerId) where.customerId = customerId;
     if (paymentMethod) where.paymentMethod = paymentMethod;
+    if (status) where.status = status;
+
+    if (search) {
+      where.OR = [
+        { gatePassNo: { contains: search, mode: 'insensitive' } },
+        { fsNo: { contains: search, mode: 'insensitive' } },
+        { customer: { name: { contains: search, mode: 'insensitive' } } },
+      ];
+    }
+
+    if (dateFrom || dateTo) {
+      where.transactionDate = {};
+      if (dateFrom) where.transactionDate.gte = new Date(dateFrom);
+      if (dateTo) {
+        const end = new Date(dateTo);
+        end.setHours(23, 59, 59, 999);
+        where.transactionDate.lte = end;
+      }
+    }
 
     const [data, total] = await Promise.all([
       prisma.saleTransaction.findMany({
@@ -173,7 +201,7 @@ class PosService {
         },
         orderBy: { createdAt: 'desc' },
         skip,
-        take: Number(limit),
+        take,
       }),
       prisma.saleTransaction.count({ where }),
     ]);
@@ -182,9 +210,9 @@ class PosService {
       data,
       pagination: {
         total,
-        page: Number(page),
-        limit: Number(limit),
-        totalPages: Math.ceil(total / limit),
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum) || 0,
       },
     };
   }

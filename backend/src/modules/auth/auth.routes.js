@@ -3,13 +3,13 @@
 const express = require('express');
 const authController = require('./auth.controller');
 const { authenticate } = require('../../middleware/auth.middleware');
-const { authorize } = require('../../middleware/role.middleware');
+const { authRateLimiter } = require('../../middleware/rate-limit.middleware');
 
 const router = express.Router();
 
 // Public routes
-router.post('/register', authController.register);
-router.post('/login', authController.login);
+router.post('/register', authRateLimiter, authController.register);
+router.post('/login', authRateLimiter, authController.login);
 
 // Protected routes
 router.get('/me', authenticate, authController.getProfile);

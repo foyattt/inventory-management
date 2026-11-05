@@ -2,18 +2,18 @@
 
 const prisma = require('../../prisma/client');
 const { AppError } = require('../../middleware/error.middleware');
+const { paginate } = require('../../utils/helpers');
+const { toQtyString, toMoneyString } = require('../../utils/money');
 
 class StockSourceService {
   async createStockSource(data, userId) {
     const { productId, sourceType, batchCode, supplierRef, receiptDate, receivedQty, unitCost, notes } = data;
 
-    // Check if product exists
     const product = await prisma.product.findUnique({ where: { id: productId } });
     if (!product) {
       throw new AppError('Product not found', 404);
     }
 
-    // Check for duplicate batch
     const existing = await prisma.stockSource.findUnique({
       where: {
         productId_batchCode: {
@@ -27,6 +27,9 @@ class StockSourceService {
       throw new AppError('A stock source with this batch code already exists for this product', 409);
     }
 
+    const qty = toQtyString(receivedQty);
+    const cost = unitCost === undefined || unitCost === null || unitCost === '' ? null : toMoneyString(unitCost);
+
     const stockSource = await prisma.$transaction(async (tx) => {
       const source = await tx.stockSource.create({
         data: {
@@ -35,9 +38,9 @@ class StockSourceService {
           batchCode,
           supplierRef,
           receiptDate: new Date(receiptDate),
-          receivedQty,
-          currentBalance: receivedQty,
-          unitCost,
+          receivedQty: qty,
+          currentBalance: qty,
+          unitCost: cost,
           notes,
         },
         include: {
@@ -47,13 +50,12 @@ class StockSourceService {
         },
       });
 
-      // Create stock movement (RECEIPT)
       await tx.stockMovement.create({
         data: {
           productId,
           stockSourceId: source.id,
           movementType: 'RECEIPT',
-          quantity: receivedQty,
+          quantity: qty,
           referenceType: 'STOCK_SOURCE',
           referenceId: source.id,
           reason: `Initial receipt - Batch ${batchCode}`,
@@ -68,7 +70,7 @@ class StockSourceService {
   }
 
   async getStockSources({ productId, sourceType, page = 1, limit = 20 }) {
-    const skip = (page - 1) * limit;
+    const { skip, take, page: pageNum, limit: limitNum } = paginate(page, limit);
 
     const where = {};
     if (productId) where.productId = productId;
@@ -84,7 +86,7 @@ class StockSourceService {
         },
         orderBy: { receiptDate: 'desc' },
         skip,
-        take: limit,
+        take,
       }),
       prisma.stockSource.count({ where }),
     ]);
@@ -93,9 +95,9 @@ class StockSourceService {
       data: sources,
       pagination: {
         total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum) || 0,
       },
     };
   }

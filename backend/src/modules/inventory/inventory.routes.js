@@ -1,11 +1,24 @@
 // backend/src/modules/inventory/inventory.routes.js
 
 const express = require('express');
+const multer = require('multer');
 const inventoryController = require('./inventory.controller');
 const { authenticate } = require('../../middleware/auth.middleware');
 const { authorize } = require('../../middleware/role.middleware');
 
 const router = express.Router();
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const name = String(file.originalname || '').toLowerCase();
+    if (name.endsWith('.csv') || name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.txt')) {
+      cb(null, true);
+      return;
+    }
+    cb(new Error('Only CSV and Excel files are supported'));
+  },
+});
 
 // All inventory routes require authentication
 router.use(authenticate);
@@ -18,6 +31,17 @@ router.post(
 );
 
 router.get('/products', inventoryController.getProducts);
+router.get(
+  '/import/template',
+  authorize('ADMIN', 'INVENTORY_STAFF', 'MANAGER'),
+  inventoryController.downloadImportTemplate
+);
+router.post(
+  '/import',
+  authorize('ADMIN', 'INVENTORY_STAFF', 'MANAGER'),
+  upload.single('file'),
+  inventoryController.importProducts
+);
 router.get('/products/:id', inventoryController.getProductById);
 
 router.patch(

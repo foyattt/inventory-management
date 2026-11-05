@@ -2,6 +2,8 @@
 
 require('dotenv').config();
 
+const { validateJwtSecret } = require('./jwt-secret');
+
 const requiredEnvVars = [
   'DATABASE_URL',
   'JWT_SECRET',
@@ -16,13 +18,15 @@ for (const envVar of requiredEnvVars) {
   }
 }
 
+const jwtSecret = validateJwtSecret(process.env.JWT_SECRET);
+
 const env = {
-  nodeEnv: process.env.NODE_ENV || 'development',
-  port: parseInt(process.env.PORT, 10) || 5000,
+  nodeEnv: process.env.NODE_ENV,
+  port: parseInt(process.env.PORT, 10),
   databaseUrl: process.env.DATABASE_URL,
   jwt: {
-    secret: process.env.JWT_SECRET,
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+    secret: jwtSecret,
+    expiresIn: process.env.JWT_EXPIRES_IN,
   },
   corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5173',
   isProduction: process.env.NODE_ENV === 'production',

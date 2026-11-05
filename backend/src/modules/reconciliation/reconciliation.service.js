@@ -2,6 +2,8 @@
 
 const prisma = require('../../prisma/client');
 const { AppError } = require('../../middleware/error.middleware');
+const { d, toMoneyString, toQtyString, moneyEquals } = require('../../utils/money');
+const { paginate } = require('../../utils/helpers');
 
 class ReconciliationService {
   async compareTransaction(saleTransactionId) {
@@ -23,15 +25,15 @@ class ReconciliationService {
       quantityMismatches: [],
       priceMismatches: [],
       totals: {
-        gatePassSubtotal: Number(transaction.gatePassSubtotal),
-        invoiceSubtotal: Number(transaction.invoiceSubtotal),
-        gatePassTax: Number(transaction.gatePassTaxAmount),
-        invoiceTax: Number(transaction.invoiceTaxAmount),
-        gatePassTotal: Number(transaction.gatePassTotal),
-        invoiceTotal: Number(transaction.invoiceTotal),
-        subtotalDiff: Number(transaction.gatePassSubtotal) - Number(transaction.invoiceSubtotal),
-        taxDiff: Number(transaction.gatePassTaxAmount) - Number(transaction.invoiceTaxAmount),
-        totalDiff: Number(transaction.gatePassTotal) - Number(transaction.invoiceTotal),
+        gatePassSubtotal: toMoneyString(transaction.gatePassSubtotal),
+        invoiceSubtotal: toMoneyString(transaction.invoiceSubtotal),
+        gatePassTax: toMoneyString(transaction.gatePassTaxAmount),
+        invoiceTax: toMoneyString(transaction.invoiceTaxAmount),
+        gatePassTotal: toMoneyString(transaction.gatePassTotal),
+        invoiceTotal: toMoneyString(transaction.invoiceTotal),
+        subtotalDiff: d(transaction.gatePassSubtotal).minus(d(transaction.invoiceSubtotal)).toFixed(2),
+        taxDiff: d(transaction.gatePassTaxAmount).minus(d(transaction.invoiceTaxAmount)).toFixed(2),
+        totalDiff: d(transaction.gatePassTotal).minus(d(transaction.invoiceTotal)).toFixed(2),
       },
     };
 
@@ -52,25 +54,25 @@ class ReconciliationService {
         differences.missingInInvoice.push({
           productId,
           productName: gpLine.product.name,
-          quantity: Number(gpLine.quantity),
-          unitPrice: Number(gpLine.unitPrice),
+          quantity: toQtyString(gpLine.quantity),
+          unitPrice: toMoneyString(gpLine.unitPrice),
         });
       } else {
-        if (Number(gpLine.quantity) !== Number(invLine.quantity)) {
+        if (!d(gpLine.quantity).eq(d(invLine.quantity))) {
           differences.quantityMismatches.push({
             productId,
             productName: gpLine.product.name,
-            gatePassQty: Number(gpLine.quantity),
-            invoiceQty: Number(invLine.quantity),
-            difference: Number(gpLine.quantity) - Number(invLine.quantity),
+            gatePassQty: toQtyString(gpLine.quantity),
+            invoiceQty: toQtyString(invLine.quantity),
+            difference: d(gpLine.quantity).minus(d(invLine.quantity)).toFixed(4),
           });
         }
-        if (Number(gpLine.unitPrice) !== Number(invLine.unitPrice)) {
+        if (!moneyEquals(gpLine.unitPrice, invLine.unitPrice)) {
           differences.priceMismatches.push({
             productId,
             productName: gpLine.product.name,
-            gatePassPrice: Number(gpLine.unitPrice),
-            invoicePrice: Number(invLine.unitPrice),
+            gatePassPrice: toMoneyString(gpLine.unitPrice),
+            invoicePrice: toMoneyString(invLine.unitPrice),
           });
         }
       }
@@ -82,8 +84,8 @@ class ReconciliationService {
         differences.missingInGatePass.push({
           productId,
           productName: invLine.product.name,
-          quantity: Number(invLine.quantity),
-          unitPrice: Number(invLine.unitPrice),
+          quantity: toQtyString(invLine.quantity),
+          unitPrice: toMoneyString(invLine.unitPrice),
         });
       }
     }
@@ -96,7 +98,7 @@ class ReconciliationService {
       status = 'QUANTITY_MISMATCH';
     } else if (differences.priceMismatches.length) {
       status = 'PRICE_MISMATCH';
-    } else if (Math.abs(differences.totals.totalDiff) > 0.01) {
+    } else if (!moneyEquals(differences.totals.totalDiff, '0')) {
       status = 'TAX_OR_TOTAL_MISMATCH';
     }
 
@@ -129,7 +131,7 @@ class ReconciliationService {
   }
 
   async getReviews({ page = 1, limit = 20, status }) {
-    const skip = (page - 1) * limit;
+    const { skip, take, page: pageNum, limit: limitNum } = paginate(page, limit);
     const where = {};
     if (status) where.status = status;
 
@@ -150,7 +152,7 @@ class ReconciliationService {
         },
         orderBy: { createdAt: 'desc' },
         skip,
-        take: Number(limit),
+        take,
       }),
       prisma.reconciliationReview.count({ where }),
     ]);
@@ -159,9 +161,9 @@ class ReconciliationService {
       data,
       pagination: {
         total,
-        page: Number(page),
-        limit: Number(limit),
-        totalPages: Math.ceil(total / limit),
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum) || 0,
       },
     };
   }

@@ -25,7 +25,7 @@ class SettingsService {
 
   async getTaxRate() {
     const setting = await this.getSetting('tax_rate');
-    return setting ? Number(setting.value) : 15;
+    return setting ? setting.value : '15.00';
   }
 }
 

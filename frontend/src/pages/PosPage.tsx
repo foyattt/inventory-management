@@ -1,4 +1,4 @@
-import { ReactNode, useState } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -16,6 +16,8 @@ import {
   Plus,
   Minus,
 } from "lucide-react";
+import { ApiError, api, formatMoney } from "../api/client";
+import { moneyAdd, moneyMul, moneyTax } from "../utils/money";
 
 interface Product {
   id: string;
@@ -25,24 +27,28 @@ interface Product {
   quantity: number;
 }
 
-export default function PosPage() {
-  const [gatePassItems, setGatePassItems] = useState<Product[]>([
-    { id: "IMP-10482", name: "Wireless Barcode Scanner", available: 148, price: 128.5, quantity: 0 },
-    { id: "LOC-20819", name: "Thermal Receipt Paper (80mm)", available: 24, price: 3.2, quantity: 0 },
-    { id: "IMP-10574", name: "POS Terminal X4", available: 0, price: 820, quantity: 0 },
-    { id: "LOC-20145", name: "Kraft Shopping Bag – Large", available: 860, price: 1.85, quantity: 0 },
-    { id: "IMP-10993", name: "Industrial Label Printer", available: 18, price: 346, quantity: 0 },
-    { id: "LOC-20387", name: "Countertop Display Stand", available: 73, price: 42.75, quantity: 0 },
-  ]);
+interface TransactionRow {
+  id: string;
+  gatePassNo: string;
+  fsNo: string;
+  customer: string;
+  paymentMethod: string;
+  total: string;
+}
 
-  const [invoiceItems, setInvoiceItems] = useState<Product[]>([
-    { id: "IMP-10482", name: "Wireless Barcode Scanner", available: 148, price: 128.5, quantity: 0 },
-    { id: "LOC-20819", name: "Thermal Receipt Paper (80mm)", available: 24, price: 3.2, quantity: 0 },
-    { id: "IMP-10574", name: "POS Terminal X4", available: 0, price: 820, quantity: 0 },
-    { id: "LOC-20145", name: "Kraft Shopping Bag – Large", available: 860, price: 1.85, quantity: 0 },
-    { id: "IMP-10993", name: "Industrial Label Printer", available: 18, price: 346, quantity: 0 },
-    { id: "LOC-20387", name: "Countertop Display Stand", available: 73, price: 42.75, quantity: 0 },
-  ]);
+export default function PosPage() {
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [txSearch, setTxSearch] = useState("");
+  const [txPage, setTxPage] = useState(1);
+  const [txPayment, setTxPayment] = useState("");
+  const [transactions, setTransactions] = useState<TransactionRow[]>([]);
+  const [txPagination, setTxPagination] = useState({ total: 0, page: 1, limit: 10, totalPages: 0 });
+  const [error, setError] = useState("");
+  const [gatePassItems, setGatePassItems] = useState<Product[]>([]);
+  const [invoiceItems, setInvoiceItems] = useState<Product[]>([]);
+  const [productPagination, setProductPagination] = useState({ total: 0, page: 1, limit: 20, totalPages: 0 });
 
   const updateQuantity = (
     list: "gate" | "invoice",
@@ -60,11 +66,98 @@ export default function PosPage() {
   };
 
   const calcSubtotal = (items: Product[]) =>
-    items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    items.reduce((sum, item) => moneyAdd(sum, moneyMul(item.quantity, item.price)), "0.00");
 
   const gateSubtotal = calcSubtotal(gatePassItems);
   const invoiceSubtotal = calcSubtotal(invoiceItems);
-  const taxRate = 0.15;
+  const gateTax = moneyTax(gateSubtotal);
+  const invoiceTax = moneyTax(invoiceSubtotal);
+  const gateTotal = moneyAdd(gateSubtotal, gateTax);
+  const invoiceTotal = moneyAdd(invoiceSubtotal, invoiceTax);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  const productQuery = useMemo(() => {
+    const params = new URLSearchParams({ page: String(page), limit: "20" });
+    if (debouncedSearch) params.set("search", debouncedSearch);
+    return params.toString();
+  }, [page, debouncedSearch]);
+
+  const txQuery = useMemo(() => {
+    const params = new URLSearchParams({ page: String(txPage), limit: "10" });
+    if (txSearch) params.set("search", txSearch);
+    if (txPayment) params.set("paymentMethod", txPayment);
+    return params.toString();
+  }, [txPage, txSearch, txPayment]);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const result = await api<{
+          data: Array<{
+            id: string;
+            internalCode: string;
+            name: string;
+            primaryUnitCost: string | number | null;
+            stockSummary: { total: number };
+          }>;
+          pagination: { total: number; page: number; limit: number; totalPages: number };
+        }>(`/inventory/products?${productQuery}`);
+        const mapped = result.data.map((product) => ({
+          id: product.id,
+          name: product.name,
+          available: product.stockSummary.total,
+          price: Number(product.primaryUnitCost || 0),
+          quantity: 0,
+          code: product.internalCode,
+        }));
+        setGatePassItems(mapped);
+        setInvoiceItems(mapped.map((item) => ({ ...item })));
+        setProductPagination(result.pagination);
+        setError("");
+      } catch (err) {
+        setGatePassItems([]);
+        setInvoiceItems([]);
+        setError(err instanceof ApiError && err.status === 401 ? "Sign in to load POS listings." : err instanceof Error ? err.message : "Failed to load POS inventory");
+      }
+    };
+    void load();
+  }, [productQuery]);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const result = await api<{
+          data: Array<{
+            id: string;
+            gatePassNo: string;
+            fsNo: string;
+            paymentMethod: string;
+            gatePassTotal: string;
+            customer: { name: string };
+          }>;
+          pagination: { total: number; page: number; limit: number; totalPages: number };
+        }>(`/pos/transactions?${txQuery}`);
+        setTransactions(
+          result.data.map((row) => ({
+            id: row.id,
+            gatePassNo: row.gatePassNo,
+            fsNo: row.fsNo,
+            customer: row.customer.name,
+            paymentMethod: row.paymentMethod,
+            total: formatMoney(row.gatePassTotal),
+          }))
+        );
+        setTxPagination(result.pagination);
+      } catch {
+        setTransactions([]);
+      }
+    };
+    void load();
+  }, [txQuery]);
 
   return (
     <div className="flex h-screen bg-slate-50">

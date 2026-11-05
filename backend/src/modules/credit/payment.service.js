@@ -2,6 +2,9 @@
 
 const prisma = require('../../prisma/client');
 const { AppError } = require('../../middleware/error.middleware');
+const { paginate } = require('../../utils/helpers');
+const { toMoneyString, isPositive } = require('../../utils/money');
+const { applyCreditPayment } = require('../../utils/atomic-balance');
 
 class PaymentService {
   async recordPayment(data, userId) {
@@ -20,7 +23,7 @@ class PaymentService {
       throw new AppError('customerId and amount are required', 400);
     }
 
-    if (Number(amount) <= 0) {
+    if (!isPositive(amount)) {
       throw new AppError('Payment amount must be greater than zero', 400);
     }
 
@@ -33,11 +36,17 @@ class PaymentService {
     }
 
     const payment = await prisma.$transaction(async (tx) => {
+      const application = await applyCreditPayment(tx, {
+        customerId,
+        creditLedgerId: creditLedgerId || null,
+        amount,
+      });
+
       const createdPayment = await tx.payment.create({
         data: {
           customerId,
-          creditLedgerId: creditLedgerId || null,
-          amount,
+          creditLedgerId: creditLedgerId || application.applied[0]?.ledgerId || null,
+          amount: toMoneyString(amount),
           paymentDate: paymentDate ? new Date(paymentDate) : new Date(),
           reference,
           accountName,
@@ -47,34 +56,14 @@ class PaymentService {
         },
       });
 
-      // Update credit ledger if provided
-      if (creditLedgerId) {
-        const ledger = await tx.creditLedger.findUnique({
-          where: { id: creditLedgerId },
-        });
-
-        if (!ledger) {
-          throw new AppError('Credit ledger not found', 404);
-        }
-
-        await tx.creditLedger.update({
-          where: { id: creditLedgerId },
-          data: {
-            creditAmount: {
-              increment: amount,
-            },
-          },
-        });
-      }
-
-      return createdPayment;
+      return { ...createdPayment, application };
     });
 
     return payment;
   }
 
   async getPaymentsByCustomer(customerId, { page = 1, limit = 20 } = {}) {
-    const skip = (page - 1) * limit;
+    const { skip, take, page: pageNum, limit: limitNum } = paginate(page, limit);
 
     const [data, total] = await Promise.all([
       prisma.payment.findMany({
@@ -86,7 +75,7 @@ class PaymentService {
         },
         orderBy: { paymentDate: 'desc' },
         skip,
-        take: Number(limit),
+        take,
       }),
       prisma.payment.count({ where: { customerId } }),
     ]);
@@ -95,9 +84,9 @@ class PaymentService {
       data,
       pagination: {
         total,
-        page: Number(page),
-        limit: Number(limit),
-        totalPages: Math.ceil(total / limit),
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum) || 0,
       },
     };
   }

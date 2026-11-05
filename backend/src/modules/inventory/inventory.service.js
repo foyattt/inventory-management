@@ -2,6 +2,8 @@
 
 const prisma = require('../../prisma/client');
 const { AppError } = require('../../middleware/error.middleware');
+const { paginate } = require('../../utils/helpers');
+const { qtyAdd, toQtyNumber } = require('../../utils/money');
 
 class InventoryService {
   async createProduct(data) {
@@ -28,8 +30,8 @@ class InventoryService {
     return product;
   }
 
-  async getProducts({ search, category, isActive, page = 1, limit = 20 }) {
-    const skip = (page - 1) * limit;
+  async getProducts({ search, category, isActive, sourceType, page = 1, limit = 20 }) {
+    const { skip, take, page: pageNum, limit: limitNum } = paginate(page, limit);
 
     const where = {};
 
@@ -42,6 +44,9 @@ class InventoryService {
 
     if (category) where.category = category;
     if (isActive !== undefined) where.isActive = isActive === 'true' || isActive === true;
+    if (sourceType) {
+      where.stockSources = { some: { sourceType } };
+    }
 
     const [products, total] = await Promise.all([
       prisma.product.findMany({
@@ -53,33 +58,37 @@ class InventoryService {
               sourceType: true,
               currentBalance: true,
               batchCode: true,
+              unitCost: true,
             },
           },
         },
         orderBy: { name: 'asc' },
         skip,
-        take: limit,
+        take,
       }),
       prisma.product.count({ where }),
     ]);
 
-    // Calculate total available stock per product
     const productsWithStock = products.map((product) => {
       const importedQty = product.stockSources
         .filter((s) => s.sourceType === 'IMPORTED')
-        .reduce((sum, s) => sum + Number(s.currentBalance), 0);
+        .reduce((sum, s) => qtyAdd(sum, s.currentBalance), '0.0000');
 
       const localQty = product.stockSources
         .filter((s) => s.sourceType === 'LOCAL')
-        .reduce((sum, s) => sum + Number(s.currentBalance), 0);
+        .reduce((sum, s) => qtyAdd(sum, s.currentBalance), '0.0000');
+
+      const totalQty = qtyAdd(importedQty, localQty);
+      const primaryCost = product.stockSources.find((s) => s.unitCost != null)?.unitCost || null;
 
       return {
         ...product,
         stockSummary: {
-          imported: importedQty,
-          local: localQty,
-          total: importedQty + localQty,
+          imported: toQtyNumber(importedQty),
+          local: toQtyNumber(localQty),
+          total: toQtyNumber(totalQty),
         },
+        primaryUnitCost: primaryCost,
       };
     });
 
@@ -87,9 +96,9 @@ class InventoryService {
       data: productsWithStock,
       pagination: {
         total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum) || 0,
       },
     };
   }
@@ -110,18 +119,18 @@ class InventoryService {
 
     const importedQty = product.stockSources
       .filter((s) => s.sourceType === 'IMPORTED')
-      .reduce((sum, s) => sum + Number(s.currentBalance), 0);
+      .reduce((sum, s) => qtyAdd(sum, s.currentBalance), '0.0000');
 
     const localQty = product.stockSources
       .filter((s) => s.sourceType === 'LOCAL')
-      .reduce((sum, s) => sum + Number(s.currentBalance), 0);
+      .reduce((sum, s) => qtyAdd(sum, s.currentBalance), '0.0000');
 
     return {
       ...product,
       stockSummary: {
-        imported: importedQty,
-        local: localQty,
-        total: importedQty + localQty,
+        imported: toQtyNumber(importedQty),
+        local: toQtyNumber(localQty),
+        total: toQtyNumber(qtyAdd(importedQty, localQty)),
       },
     };
   }
@@ -152,22 +161,22 @@ class InventoryService {
         productId,
         currentBalance: { gt: 0 },
       },
-      orderBy: { receiptDate: 'asc' }, // FIFO
+      orderBy: { receiptDate: 'asc' },
     });
 
     const imported = sources
       .filter((s) => s.sourceType === 'IMPORTED')
-      .reduce((sum, s) => sum + Number(s.currentBalance), 0);
+      .reduce((sum, s) => qtyAdd(sum, s.currentBalance), '0.0000');
 
     const local = sources
       .filter((s) => s.sourceType === 'LOCAL')
-      .reduce((sum, s) => sum + Number(s.currentBalance), 0);
+      .reduce((sum, s) => qtyAdd(sum, s.currentBalance), '0.0000');
 
     return {
       productId,
-      imported,
-      local,
-      total: imported + local,
+      imported: toQtyNumber(imported),
+      local: toQtyNumber(local),
+      total: toQtyNumber(qtyAdd(imported, local)),
       sources,
     };
   }
