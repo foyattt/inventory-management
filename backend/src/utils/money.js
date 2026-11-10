@@ -73,6 +73,8 @@ module.exports = {
   toQty,
   toMoneyString,
   toQtyString,
+  toQtyNumber,      // add this
+  toMoneyNumber,
   moneyAdd,
   qtyAdd,
   moneyMul,
@@ -82,3 +84,11 @@ module.exports = {
   MONEY_DP,
   QTY_DP,
 };
+
+function toQtyNumber(value) {
+  return Number(toQty(value).toFixed(QTY_DP));
+}
+
+function toMoneyNumber(value) {
+  return Number(toMoney(value).toFixed(MONEY_DP));
+}

@@ -79,7 +79,7 @@ class InventoryImportService {
       throw new AppError('An import file is required', 400);
     }
 
-    const { rows } = parseSpreadsheet(buffer, originalName);
+    const { rows } = await parseSpreadsheet(buffer, originalName);
     if (!rows.length) {
       throw new AppError('The import file does not contain any data rows', 400);
     }

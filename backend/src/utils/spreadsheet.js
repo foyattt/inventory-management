@@ -1,6 +1,6 @@
 // backend/src/utils/spreadsheet.js
 
-const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 
 function splitCsvLine(line) {
   const result = [];
@@ -58,28 +58,67 @@ function parseCsv(text) {
   return { headers, rows };
 }
 
-function parseSpreadsheet(buffer, originalName = 'upload.csv') {
+function cellToString(value) {
+  if (value === null || value === undefined) return '';
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === 'object') {
+    if (value.text !== undefined) return String(value.text).trim();
+    if (value.result !== undefined) return String(value.result).trim();
+    return String(value).trim();
+  }
+  return String(value).trim();
+}
+
+async function parseExcel(buffer) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) {
+    return { headers: [], rows: [] };
+  }
+
+  const headerRow = worksheet.getRow(1);
+  const headers = [];
+  headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+    headers[colNumber - 1] = cellToString(cell.value);
+  });
+
+  const cleanHeaders = headers.filter((h) => h && h.length > 0);
+  if (cleanHeaders.length === 0) {
+    return { headers: [], rows: [] };
+  }
+
+  const rows = [];
+  worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    if (rowNumber === 1) return;
+
+    const item = { __row: rowNumber };
+    let hasAnyValue = false;
+
+    cleanHeaders.forEach((header, idx) => {
+      const cell = row.getCell(idx + 1);
+      const value = cellToString(cell.value);
+      item[header] = value;
+      if (value !== '') hasAnyValue = true;
+    });
+
+    if (hasAnyValue) {
+      rows.push(item);
+    }
+  });
+
+  return { headers: cleanHeaders, rows };
+}
+
+async function parseSpreadsheet(buffer, originalName = 'upload.csv') {
   const filename = String(originalName).toLowerCase();
 
   if (filename.endsWith('.csv') || filename.endsWith('.txt')) {
     return parseCsv(buffer.toString('utf8'));
   }
 
-  const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
-  const sheetName = workbook.SheetNames[0];
-  if (!sheetName) {
-    return { headers: [], rows: [] };
-  }
-
-  const sheet = workbook.Sheets[sheetName];
-  const jsonRows = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false });
-  const headers = jsonRows.length ? Object.keys(jsonRows[0]) : [];
-  const rows = jsonRows.map((row, index) => ({
-    ...row,
-    __row: index + 2,
-  }));
-
-  return { headers, rows };
+  return parseExcel(buffer);
 }
 
 function getField(row, aliases) {
