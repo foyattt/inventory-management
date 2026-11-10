@@ -1,30 +1,31 @@
 // backend/src/utils/tax.calculator.js
 
-const TAX_RATE = 15; // 15%
+const { moneyMul, moneyAdd, toMoneyString } = require('./money');
+
+const TAX_RATE = '15.00';
 
 function calculateLineTotal(quantity, unitPrice) {
-  const qty = Number(quantity);
-  const price = Number(unitPrice);
-  return Number((qty * price).toFixed(2));
+  return moneyMul(quantity, unitPrice, 2);
 }
 
-function calculateTax(subtotal) {
-  return Number(((Number(subtotal) * TAX_RATE) / 100).toFixed(2));
+function calculateTax(subtotal, taxRate = TAX_RATE) {
+  return moneyMul(subtotal, moneyMul(taxRate, '0.01', 4), 2);
 }
 
-function calculateTotals(items = []) {
-  const subtotal = items.reduce((sum, item) => {
-    return sum + calculateLineTotal(item.quantity, item.unitPrice);
-  }, 0);
+function calculateTotals(items = [], taxRate = TAX_RATE) {
+  const subtotal = items.reduce(
+    (sum, item) => moneyAdd(sum, calculateLineTotal(item.quantity, item.unitPrice)),
+    '0.00'
+  );
 
-  const taxAmount = calculateTax(subtotal);
-  const total = Number((subtotal + taxAmount).toFixed(2));
+  const taxAmount = calculateTax(subtotal, taxRate);
+  const total = moneyAdd(subtotal, taxAmount);
 
   return {
-    subtotal: Number(subtotal.toFixed(2)),
-    taxAmount,
-    total,
-    taxRate: TAX_RATE,
+    subtotal: toMoneyString(subtotal),
+    taxAmount: toMoneyString(taxAmount),
+    total: toMoneyString(total),
+    taxRate: toMoneyString(taxRate),
   };
 }
 

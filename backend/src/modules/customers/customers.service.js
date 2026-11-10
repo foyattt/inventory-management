@@ -2,6 +2,8 @@
 
 const prisma = require('../../prisma/client');
 const { AppError } = require('../../middleware/error.middleware');
+const { paginate } = require('../../utils/helpers');
+const { d, toMoneyString } = require('../../utils/money');
 
 class CustomersService {
   async createCustomer(data) {
@@ -31,7 +33,7 @@ class CustomersService {
         phone,
         email,
         address,
-        creditLimit: creditLimit || 0,
+        creditLimit: creditLimit === undefined || creditLimit === null || creditLimit === '' ? '0.00' : toMoneyString(creditLimit),
         creditPeriodDays: creditPeriodDays || 30,
       },
     });
@@ -40,7 +42,7 @@ class CustomersService {
   }
 
   async getCustomers({ search, page = 1, limit = 20 }) {
-    const skip = (page - 1) * limit;
+    const { skip, take, page: pageNum, limit: limitNum } = paginate(page, limit);
     const where = {};
 
     if (search) {
@@ -56,7 +58,7 @@ class CustomersService {
         where,
         orderBy: { name: 'asc' },
         skip,
-        take: Number(limit),
+        take,
       }),
       prisma.customer.count({ where }),
     ]);
@@ -65,9 +67,9 @@ class CustomersService {
       data,
       pagination: {
         total,
-        page: Number(page),
-        limit: Number(limit),
-        totalPages: Math.ceil(total / limit),
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum) || 0,
       },
     };
   }
@@ -100,14 +102,15 @@ class CustomersService {
       },
     });
 
-    const totalDebit = Number(outstanding._sum.debitAmount || 0);
-    const totalCredit = Number(outstanding._sum.creditAmount || 0);
-    const outstandingBalance = totalDebit - totalCredit;
+    const totalDebit = d(outstanding._sum.debitAmount || 0);
+    const totalCredit = d(outstanding._sum.creditAmount || 0);
+    const outstandingBalance = totalDebit.minus(totalCredit).toFixed(2);
+    const creditLimit = toMoneyString(customer.creditLimit);
 
     return {
       ...customer,
       outstandingBalance,
-      availableCredit: Number(customer.creditLimit) - outstandingBalance,
+      availableCredit: d(creditLimit).minus(d(outstandingBalance)).toFixed(2),
     };
   }
 
@@ -125,7 +128,7 @@ class CustomersService {
         phone: data.phone,
         email: data.email,
         address: data.address,
-        creditLimit: data.creditLimit,
+        creditLimit: data.creditLimit === undefined ? undefined : toMoneyString(data.creditLimit),
         creditPeriodDays: data.creditPeriodDays,
         isActive: data.isActive,
       },

@@ -1,6 +1,7 @@
 // backend/src/modules/pos/deposit.service.js
 
 const { AppError } = require('../../middleware/error.middleware');
+const { moneyAdd, moneyEquals, toMoneyString } = require('../../utils/money');
 
 class DepositService {
   async createDepositAllocations(tx, saleTransactionId, allocations, expectedTotal) {
@@ -8,12 +9,14 @@ class DepositService {
       throw new AppError('At least one deposit allocation is required for Cash payment', 400);
     }
 
-    const totalAllocated = allocations.reduce((sum, a) => sum + Number(a.amount), 0);
+    const totalAllocated = allocations.reduce(
+      (sum, allocation) => moneyAdd(sum, allocation.amount),
+      '0.00'
+    );
 
-    // Allow small rounding difference (0.01)
-    if (Math.abs(totalAllocated - Number(expectedTotal)) > 0.01) {
+    if (!moneyEquals(totalAllocated, expectedTotal)) {
       throw new AppError(
-        `Deposit allocations (${totalAllocated}) must equal Gate Pass total (${expectedTotal})`,
+        `Deposit allocations (${totalAllocated}) must equal Gate Pass total (${toMoneyString(expectedTotal)})`,
         400
       );
     }
@@ -26,7 +29,7 @@ class DepositService {
           saleTransactionId,
           accountName: allocation.accountName,
           bankName: allocation.bankName,
-          amount: allocation.amount,
+          amount: toMoneyString(allocation.amount),
         },
       });
       created.push(record);

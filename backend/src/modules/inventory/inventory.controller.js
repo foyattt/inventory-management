@@ -3,6 +3,7 @@
 const inventoryService = require('./inventory.service');
 const stockSourceService = require('./stock-source.service');
 const stockMovementService = require('./stock-movement.service');
+const inventoryImportService = require('./import.service');
 const { AppError } = require('../../middleware/error.middleware');
 
 class InventoryController {
@@ -138,6 +139,38 @@ class InventoryController {
         success: true,
         ...result,
       });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async importProducts(req, res, next) {
+    try {
+      if (!req.file) {
+        throw new AppError('Upload a CSV or Excel file using the file field', 400);
+      }
+
+      const result = await inventoryImportService.importFromFile(
+        { buffer: req.file.buffer, originalName: req.file.originalname },
+        req.user.id
+      );
+
+      res.status(200).json({
+        success: true,
+        message: 'Import completed',
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async downloadImportTemplate(req, res, next) {
+    try {
+      const csv = inventoryImportService.getTemplateCsv();
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename="inventory-import-template.csv"');
+      res.status(200).send(csv);
     } catch (error) {
       next(error);
     }

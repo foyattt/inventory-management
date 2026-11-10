@@ -2,38 +2,67 @@
 
 const prisma = require('../../prisma/client');
 const { AppError } = require('../../middleware/error.middleware');
+const { paginate } = require('../../utils/helpers');
+const { toMoneyString, isPositive, d } = require('../../utils/money');
+const { applyCreditPayment } = require('../../utils/atomic-balance');
 
 class CreditService {
-  async getCreditOverview({ page = 1, limit = 20, status }) {
-    const skip = (page - 1) * limit;
+  async getCreditOverview({ page = 1, limit = 20, status, search, overdue }) {
+    const { skip, take, page: pageNum, limit: limitNum } = paginate(page, limit);
     const where = {};
     if (status) where.status = status;
+
+    if (search) {
+      where.customer = {
+        OR: [
+          { name: { contains: search, mode: 'insensitive' } },
+          { tinNo: { contains: search, mode: 'insensitive' } },
+        ],
+      };
+    }
+
+    if (overdue === 'true' || overdue === true) {
+      where.status = where.status || { not: 'SETTLED' };
+      where.dueDate = { lt: new Date() };
+    }
 
     const [data, total] = await Promise.all([
       prisma.creditLedger.findMany({
         where,
         include: {
           customer: {
-            select: { id: true, name: true, creditLimit: true },
+            select: { id: true, name: true, creditLimit: true, tinNo: true },
           },
           saleTransaction: {
-            select: { id: true, gatePassNo: true, fsNo: true },
+            select: { id: true, gatePassNo: true, fsNo: true, transactionDate: true },
           },
         },
         orderBy: { dueDate: 'asc' },
         skip,
-        take: Number(limit),
+        take,
       }),
       prisma.creditLedger.count({ where }),
     ]);
 
+    const mapped = data.map((ledger) => {
+      const outstanding = d(ledger.debitAmount).minus(d(ledger.creditAmount)).toFixed(2);
+      const limit = toMoneyString(ledger.customer.creditLimit);
+      const availableCredit = d(limit).minus(d(outstanding)).toFixed(2);
+
+      return {
+        ...ledger,
+        outstanding,
+        availableCredit,
+      };
+    });
+
     return {
-      data,
+      data: mapped,
       pagination: {
         total,
-        page: Number(page),
-        limit: Number(limit),
-        totalPages: Math.ceil(total / limit),
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum) || 0,
       },
     };
   }
@@ -45,7 +74,7 @@ class CreditService {
       throw new AppError('customerId and amount are required', 400);
     }
 
-    if (Number(amount) <= 0) {
+    if (!isPositive(amount)) {
       throw new AppError('Payment amount must be greater than zero', 400);
     }
 
@@ -55,11 +84,17 @@ class CreditService {
     }
 
     const payment = await prisma.$transaction(async (tx) => {
+      const application = await applyCreditPayment(tx, {
+        customerId,
+        creditLedgerId: creditLedgerId || null,
+        amount,
+      });
+
       const createdPayment = await tx.payment.create({
         data: {
           customerId,
-          creditLedgerId: creditLedgerId || null,
-          amount,
+          creditLedgerId: creditLedgerId || application.applied[0]?.ledgerId || null,
+          amount: toMoneyString(amount),
           paymentDate: paymentDate ? new Date(paymentDate) : new Date(),
           reference,
           accountName,
@@ -69,16 +104,7 @@ class CreditService {
         },
       });
 
-      if (creditLedgerId) {
-        await tx.creditLedger.update({
-          where: { id: creditLedgerId },
-          data: {
-            creditAmount: { increment: amount },
-          },
-        });
-      }
-
-      return createdPayment;
+      return { ...createdPayment, application };
     });
 
     return payment;
@@ -98,15 +124,55 @@ class CreditService {
       },
     });
 
-    const totalDebit = Number(aggregates._sum.debitAmount || 0);
-    const totalCredit = Number(aggregates._sum.creditAmount || 0);
-    const outstanding = totalDebit - totalCredit;
+    const totalDebit = d(aggregates._sum.debitAmount || 0);
+    const totalCredit = d(aggregates._sum.creditAmount || 0);
+    const outstanding = totalDebit.minus(totalCredit).toFixed(2);
+    const creditLimit = toMoneyString(customer.creditLimit);
 
     return {
       customerId,
-      creditLimit: Number(customer.creditLimit),
+      creditLimit,
       outstanding,
-      availableCredit: Number(customer.creditLimit) - outstanding,
+      availableCredit: d(creditLimit).minus(d(outstanding)).toFixed(2),
+    };
+  }
+  async getPayments({ customerId, page = 1, limit = 20 } = {}) {
+    const skip = (Number(page) - 1) * Number(limit);
+    const where = {};
+  
+    if (customerId) {
+      where.customerId = customerId;
+    }
+  
+    const [data, total] = await Promise.all([
+      prisma.payment.findMany({
+        where,
+        include: {
+          customer: {
+            select: { id: true, name: true, tinNo: true },
+          },
+          enteredBy: {
+            select: { id: true, fullName: true },
+          },
+          creditLedger: {
+            select: { id: true, dueDate: true, status: true },
+          },
+        },
+        orderBy: { paymentDate: 'desc' },
+        skip,
+        take: Number(limit),
+      }),
+      prisma.payment.count({ where }),
+    ]);
+  
+    return {
+      data,
+      pagination: {
+        total,
+        page: Number(page),
+        limit: Number(limit),
+        totalPages: Math.ceil(total / Number(limit)) || 0,
+      },
     };
   }
 }

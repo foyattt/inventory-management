@@ -1,4 +1,4 @@
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -15,71 +15,125 @@ import {
   AlertTriangle,
   Pencil,
 } from "lucide-react";
+import { ApiError, api, formatMoney } from "../api/client";
+
+interface CreditRow {
+  id: string;
+  name: string;
+  code: string;
+  outstanding: string;
+  maxLimit: string;
+  available: string;
+  transactionDate: string;
+  dueDate: string;
+  timeStatus: string;
+  creditStatus: string;
+}
+
+interface CreditResponse {
+  success: boolean;
+  data: Array<{
+    id: string;
+    status: string;
+    dueDate: string | null;
+    outstanding: string;
+    availableCredit: string;
+    customer: { id: string; name: string; creditLimit: string; tinNo: string | null };
+    saleTransaction: { transactionDate: string; gatePassNo: string } | null;
+  }>;
+  pagination: { total: number; page: number; limit: number; totalPages: number };
+}
+
+function daysLabel(dueDate: string | null, status: string): string {
+  if (status === "SETTLED") return "Settled";
+  if (!dueDate) return "No due date";
+  const due = new Date(dueDate);
+  const diff = Math.floor((Date.now() - due.getTime()) / (1000 * 60 * 60 * 24));
+  if (diff > 0) return `${diff} days overdue`;
+  if (diff === 0) return "Due today";
+  return `Due in ${Math.abs(diff)} days`;
+}
+
+function prettyStatus(status: string): string {
+  return status
+    .toLowerCase()
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
 
 export default function CreditPage() {
-  const creditAccounts = [
-    {
-      name: "Northstar Trading Co.",
-      code: "CUS-001",
-      outstanding: "$94,200.00",
-      maxLimit: "$120,000.00",
-      available: "$25,800.00",
-      transactionDate: "2025-05-03",
-      dueDate: "2025-06-02",
-      timeStatus: "519 days overdue",
-      creditStatus: "Overdue",
-    },
-    {
-      name: "Atlas Retail Group",
-      code: "CUS-002",
-      outstanding: "$68,100.00",
-      maxLimit: "$75,000.00",
-      available: "$6,900.00",
-      transactionDate: "2025-04-26",
-      dueDate: "2025-05-26",
-      timeStatus: "526 days overdue",
-      creditStatus: "Overdue",
-    },
-    {
-      name: "Mara Foods Ltd.",
-      code: "CUS-003",
-      outstanding: "$50,000.00",
-      maxLimit: "$50,000.00",
-      available: "$0.00",
-      transactionDate: "2025-04-19",
-      dueDate: "2025-05-19",
-      timeStatus: "533 days overdue",
-      creditStatus: "Overdue",
-    },
-    {
-      name: "Samuel Koto",
-      code: "CUS-004",
-      outstanding: "$32,400.00",
-      maxLimit: "$40,000.00",
-      available: "$7,600.00",
-      transactionDate: "2025-05-12",
-      dueDate: "2025-06-12",
-      timeStatus: "509 days overdue",
-      creditStatus: "Overdue",
-    },
-  ];
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [status, setStatus] = useState("");
+  const [page, setPage] = useState(1);
+  const [accounts, setAccounts] = useState<CreditRow[]>([]);
+  const [pagination, setPagination] = useState({ total: 0, page: 1, limit: 20, totalPages: 0 });
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  const query = useMemo(() => {
+    const params = new URLSearchParams({ page: String(page), limit: "20" });
+    if (debouncedSearch) params.set("search", debouncedSearch);
+    if (status === "OVERDUE") params.set("overdue", "true");
+    else if (status) params.set("status", status);
+    return params.toString();
+  }, [page, debouncedSearch, status]);
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const result = await api<CreditResponse>(`/credit?${query}`);
+        setAccounts(
+          result.data.map((ledger) => ({
+            id: ledger.id,
+            name: ledger.customer.name,
+            code: ledger.saleTransaction?.gatePassNo || ledger.customer.tinNo || ledger.customer.id.slice(-6),
+            outstanding: formatMoney(ledger.outstanding),
+            maxLimit: formatMoney(ledger.customer.creditLimit),
+            available: formatMoney(ledger.availableCredit),
+            transactionDate: ledger.saleTransaction?.transactionDate
+              ? ledger.saleTransaction.transactionDate.slice(0, 10)
+              : "—",
+            dueDate: ledger.dueDate ? ledger.dueDate.slice(0, 10) : "—",
+            timeStatus: daysLabel(ledger.dueDate, ledger.status),
+            creditStatus: prettyStatus(ledger.status),
+          }))
+        );
+        setPagination(result.pagination);
+      } catch (err) {
+        setAccounts([]);
+        if (err instanceof ApiError && err.status === 401) {
+          setError("Sign in to load credit listings.");
+        } else {
+          setError(err instanceof Error ? err.message : "Failed to load credit");
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+    void load();
+  }, [query]);
+
+  const start = pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1;
+  const end = Math.min(pagination.page * pagination.limit, pagination.total);
 
   return (
     <div className="flex h-screen bg-slate-50">
-      {/* Sidebar */}
       <aside className="w-64 bg-slate-900 text-white flex flex-col">
         <div className="px-6 py-5 flex items-center gap-2 border-b border-slate-800">
-          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-sm">
-            S
-          </div>
+          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-sm">S</div>
           <span className="font-semibold text-lg">Stockwise</span>
         </div>
-
         <nav className="flex-1 px-3 py-4 space-y-1">
-          <p className="px-3 text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
-            Workspace
-          </p>
-
+          <p className="px-3 text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">Workspace</p>
           <NavItem to="/" icon={<LayoutDashboard size={18} />} label="Reports" />
           <NavItem to="/inventory" icon={<Package size={18} />} label="Inventory" />
           <NavItem to="/pos" icon={<ShoppingCart size={18} />} label="Point of Sale" />
@@ -87,16 +141,13 @@ export default function CreditPage() {
           <NavItem to="/credit" icon={<CreditCard size={18} />} label="Credit" active />
           <NavItem to="/customer" icon={<Users size={18} />} label="Customer" />
         </nav>
-
         <div className="p-4">
           <div className="bg-slate-800 rounded-xl p-4">
             <div className="flex items-center gap-2 mb-2">
               <HelpCircle size={16} className="text-blue-400" />
               <span className="text-sm font-medium">Need assistance?</span>
             </div>
-            <p className="text-xs text-slate-400 mb-3">
-              Visit the operations help center.
-            </p>
+            <p className="text-xs text-slate-400 mb-3">Visit the operations help center.</p>
             <button className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
               Open help center <ArrowRight size={12} />
             </button>
@@ -104,15 +155,13 @@ export default function CreditPage() {
         </div>
       </aside>
 
-      {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top bar */}
         <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6">
           <div className="text-sm text-slate-500">
-            Stockwise <span className="mx-1">/</span>{" "}
-            <span className="text-slate-900 font-medium">Credit</span>
+            Stockwise <span className="mx-1">/</span> <span className="text-slate-900 font-medium">Credit</span>
           </div>
           <div className="flex items-center gap-4">
+            <Link to="/login" className="text-sm text-blue-600">Sign in</Link>
             <button className="relative p-2 text-slate-500 hover:text-slate-700">
               <Bell size={18} />
               <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full"></span>
@@ -124,85 +173,60 @@ export default function CreditPage() {
           </div>
         </header>
 
-        {/* Page content */}
         <main className="flex-1 overflow-y-auto p-6">
-          {/* Header */}
           <div className="mb-6">
-            <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">
-              Accounts Receivable
-            </p>
+            <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Accounts Receivable</p>
             <h1 className="text-2xl font-semibold text-slate-900">Credit</h1>
             <p className="text-sm text-slate-500 mt-1">
               Monitor customer-specific amount limits, payment periods, and incoming payments.
             </p>
           </div>
 
-          {/* Top metric cards */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-            {/* Total outstanding */}
-            <div className="bg-slate-900 text-white rounded-xl p-5 relative overflow-hidden">
-              <p className="text-sm text-slate-300">Total outstanding credit</p>
-              <p className="text-3xl font-semibold mt-1">$244,700.00</p>
-              <p className="text-xs text-slate-400 mt-2">Live customer balances after recorded payments</p>
-              <div className="absolute top-4 right-4 text-xs bg-white/10 px-2.5 py-1 rounded-full">
-                Across 4 active accounts
-              </div>
+          {error && (
+            <div className="mb-4 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-xl px-4 py-3">
+              {error} {error.includes("Sign in") && <Link to="/login" className="underline font-medium">Go to login</Link>}
             </div>
+          )}
 
-            {/* Overdue accounts */}
-            <div className="bg-white rounded-xl border border-slate-200 p-5 relative">
-              <div className="absolute top-4 right-4">
-                <AlertTriangle size={18} className="text-red-500" />
-              </div>
-              <p className="text-sm text-slate-500">Overdue accounts</p>
-              <p className="text-2xl font-semibold text-slate-900 mt-1">4</p>
-              <p className="text-xs text-slate-400 mt-2">Past POS/OSL past due</p>
-              <button className="mt-3 text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1">
-                Review balances <ArrowRight size={14} />
-              </button>
-            </div>
-
-            {/* Available credit */}
-            <div className="bg-white rounded-xl border border-slate-200 p-5">
-              <p className="text-sm text-slate-500">Available credit</p>
-              <p className="text-2xl font-semibold text-slate-900 mt-1">$150,300</p>
-              <p className="text-xs text-slate-400 mt-2">Across all configured customer limits</p>
-            </div>
-          </div>
-
-          {/* Warning banner */}
-          <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-6 flex items-start gap-3">
-            <AlertTriangle size={18} className="text-amber-600 mt-0.5 shrink-0" />
-            <div>
-              <p className="text-sm font-medium text-amber-800">
-                Additional credit requires authorisation
-              </p>
-              <p className="text-sm text-amber-700 mt-0.5">
-                4 customer accounts are overdue. Review payment history before extending more credit.
-              </p>
-            </div>
-          </div>
-
-          {/* Customer credit controls */}
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
               <div>
                 <h2 className="font-medium text-slate-900">Customer credit controls</h2>
                 <p className="text-sm text-slate-500">
-                  Monetary and time-based limits linked to Customer records
+                  {loading ? "Loading..." : `${pagination.total} credit ledger rows`}
                 </p>
               </div>
-              <div className="relative">
-                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder="Search customer..."
-                  className="pl-9 pr-4 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
-                />
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={search}
+                    onChange={(e) => {
+                      setPage(1);
+                      setSearch(e.target.value);
+                    }}
+                    placeholder="Search customer..."
+                    className="pl-9 pr-4 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
+                  />
+                </div>
+                <select
+                  value={status}
+                  onChange={(e) => {
+                    setPage(1);
+                    setStatus(e.target.value);
+                  }}
+                  className="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white"
+                >
+                  <option value="">All statuses</option>
+                  <option value="OVERDUE">Overdue</option>
+                  <option value="WITHIN_LIMIT">Within limit</option>
+                  <option value="NEAR_LIMIT">Near limit</option>
+                  <option value="SETTLED">Settled</option>
+                </select>
               </div>
             </div>
 
-            {/* Table header */}
             <div className="grid grid-cols-12 gap-3 px-5 py-3 text-xs font-medium text-slate-500 border-b border-slate-100 bg-slate-50">
               <div className="col-span-2">CUSTOMER</div>
               <div className="col-span-1">OUTSTANDING</div>
@@ -215,13 +239,9 @@ export default function CreditPage() {
               <div className="col-span-2 text-right">ACTIONS</div>
             </div>
 
-            {/* Rows */}
             <div className="divide-y divide-slate-100">
-              {creditAccounts.map((account) => (
-                <div
-                  key={account.code}
-                  className="grid grid-cols-12 gap-3 px-5 py-4 items-center hover:bg-slate-50 transition-colors text-sm"
-                >
+              {accounts.map((account) => (
+                <div key={account.id} className="grid grid-cols-12 gap-3 px-5 py-4 items-center hover:bg-slate-50 transition-colors text-sm">
                   <div className="col-span-2 flex items-center gap-3">
                     <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-xs font-semibold text-slate-600">
                       {account.name.split(" ").map((n) => n[0]).slice(0, 2).join("")}
@@ -231,7 +251,6 @@ export default function CreditPage() {
                       <p className="text-xs text-slate-400">{account.code}</p>
                     </div>
                   </div>
-
                   <div className="col-span-1 font-medium text-slate-900">{account.outstanding}</div>
                   <div className="col-span-1 text-slate-700">{account.maxLimit}</div>
                   <div className="col-span-1 text-slate-700">{account.available}</div>
@@ -245,15 +264,25 @@ export default function CreditPage() {
                     </span>
                   </div>
                   <div className="col-span-2 flex items-center justify-end gap-2">
-                    <button className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg hover:bg-slate-50">
-                      Payment
-                    </button>
+                    <button className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg hover:bg-slate-50">Payment</button>
                     <button className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg">
                       <Pencil size={14} />
                     </button>
                   </div>
                 </div>
               ))}
+              {!loading && accounts.length === 0 && (
+                <div className="px-5 py-10 text-center text-sm text-slate-500">No credit records match these filters.</div>
+              )}
+            </div>
+
+            <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between text-sm text-slate-500">
+              <span>Showing {start}–{end} of {pagination.total}</span>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={pagination.page <= 1} className="px-3 py-1 border border-slate-200 rounded-lg disabled:opacity-50">Previous</button>
+                <button className="w-8 h-8 bg-slate-900 text-white rounded-lg text-sm">{pagination.page || 1}</button>
+                <button onClick={() => setPage((p) => p + 1)} disabled={pagination.page >= pagination.totalPages} className="px-3 py-1 border border-slate-200 rounded-lg disabled:opacity-50">Next</button>
+              </div>
             </div>
           </div>
         </main>
@@ -274,9 +303,7 @@ function NavItem({ to, icon, label, active = false }: NavItemProps) {
     <Link
       to={to}
       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-        active
-          ? "bg-blue-600 text-white"
-          : "text-slate-400 hover:bg-slate-800 hover:text-white"
+        active ? "bg-blue-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"
       }`}
     >
       {icon}

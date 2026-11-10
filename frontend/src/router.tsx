@@ -5,8 +5,13 @@ import PosPage from "./pages/PosPage";
 import ReconciliationPage from "./pages/ReconciliationPage";
 import CreditPage from "./pages/CreditPage";
 import CustomersPage from "./pages/CustomersPage";
+import LoginPage from "./pages/LoginPage";
 
 const router = createBrowserRouter([
+  {
+    path: "/login",
+    element: <LoginPage />,
+  },
   {
     path: "/",
     element: <ReportsPage />,

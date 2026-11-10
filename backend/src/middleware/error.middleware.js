@@ -45,6 +45,11 @@ const errorHandler = (err, req, res, next) => {
     details = err.errors;
   }
 
+  if (err.name === 'MulterError' || /Only CSV and Excel files/.test(err.message || '')) {
+    statusCode = 400;
+    message = err.message || 'Invalid upload';
+  }
+
   // JWT errors
   if (err.name === 'JsonWebTokenError') {
     statusCode = 401;
