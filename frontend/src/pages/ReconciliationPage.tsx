@@ -26,7 +26,7 @@ export default function ReconciliationPage() {
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-sm">
             S
           </div>
-          <span className="font-semibold text-lg">Stockwise</span>
+          <span className="font-semibold text-lg">ZeSino</span>
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-1">
@@ -63,7 +63,7 @@ export default function ReconciliationPage() {
         {/* Top bar */}
         <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6">
           <div className="text-sm text-slate-500">
-            Stockwise <span className="mx-1">/</span>{" "}
+            ZeSino <span className="mx-1">/</span>{" "}
             <span className="text-slate-900 font-medium">Reconciliation</span>
           </div>
           <div className="flex items-center gap-4">

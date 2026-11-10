@@ -130,7 +130,7 @@ export default function CreditPage() {
       <aside className="w-64 bg-slate-900 text-white flex flex-col">
         <div className="px-6 py-5 flex items-center gap-2 border-b border-slate-800">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-sm">S</div>
-          <span className="font-semibold text-lg">Stockwise</span>
+          <span className="font-semibold text-lg">ZeSino</span>
         </div>
         <nav className="flex-1 px-3 py-4 space-y-1">
           <p className="px-3 text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">Workspace</p>
@@ -158,7 +158,7 @@ export default function CreditPage() {
       <div className="flex-1 flex flex-col overflow-hidden">
         <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6">
           <div className="text-sm text-slate-500">
-            Stockwise <span className="mx-1">/</span> <span className="text-slate-900 font-medium">Credit</span>
+            ZeSino <span className="mx-1">/</span> <span className="text-slate-900 font-medium">Credit</span>
           </div>
           <div className="flex items-center gap-4">
             <Link to="/login" className="text-sm text-blue-600">Sign in</Link>
