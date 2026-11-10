@@ -136,6 +136,45 @@ class CreditService {
       availableCredit: d(creditLimit).minus(d(outstanding)).toFixed(2),
     };
   }
+  async getPayments({ customerId, page = 1, limit = 20 } = {}) {
+    const skip = (Number(page) - 1) * Number(limit);
+    const where = {};
+  
+    if (customerId) {
+      where.customerId = customerId;
+    }
+  
+    const [data, total] = await Promise.all([
+      prisma.payment.findMany({
+        where,
+        include: {
+          customer: {
+            select: { id: true, name: true, tinNo: true },
+          },
+          enteredBy: {
+            select: { id: true, fullName: true },
+          },
+          creditLedger: {
+            select: { id: true, dueDate: true, status: true },
+          },
+        },
+        orderBy: { paymentDate: 'desc' },
+        skip,
+        take: Number(limit),
+      }),
+      prisma.payment.count({ where }),
+    ]);
+  
+    return {
+      data,
+      pagination: {
+        total,
+        page: Number(page),
+        limit: Number(limit),
+        totalPages: Math.ceil(total / Number(limit)) || 0,
+      },
+    };
+  }
 }
 
 module.exports = new CreditService();

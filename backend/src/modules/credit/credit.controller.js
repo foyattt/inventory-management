@@ -39,6 +39,17 @@ class CreditController {
       next(error);
     }
   }
+  async getPayments(req, res, next) {
+    try {
+      const result = await creditService.getPayments(req.query);
+      res.status(200).json({
+        success: true,
+        ...result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = new CreditController();

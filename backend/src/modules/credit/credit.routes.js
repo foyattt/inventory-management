@@ -9,8 +9,20 @@ const router = express.Router();
 
 router.use(authenticate);
 
+// Credit ledger overview
 router.get('/', creditController.getCreditOverview);
-router.post('/payments', authorize('ADMIN', 'ACCOUNTANT', 'MANAGER'), creditController.recordPayment);
+
+// Payments list (all, or filter by customerId)
+router.get('/payments', creditController.getPayments);
+
+// Record payment
+router.post(
+  '/payments',
+  authorize('ADMIN', 'ACCOUNTANT', 'MANAGER'),
+  creditController.recordPayment
+);
+
+// Customer credit summary
 router.get('/summary/:customerId', creditController.getCustomerCreditSummary);
 
 module.exports = router;
