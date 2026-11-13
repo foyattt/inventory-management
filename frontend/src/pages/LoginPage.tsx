@@ -34,7 +34,7 @@ export default function LoginPage() {
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-sm text-white">
             S
           </div>
-          <span className="font-semibold text-lg">Stockwise</span>
+          <span className="font-semibold text-lg">ZeSino</span>
         </div>
         <h1 className="text-xl font-semibold text-slate-900 mb-1">Sign in</h1>
         <p className="text-sm text-slate-500 mb-5">Use your ERP account to access inventory imports and listings.</p>
