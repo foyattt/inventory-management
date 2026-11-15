@@ -35,7 +35,7 @@ export function TransactionHeader({
   onRegisterCustomer,
 }: Props) {
   return (
-    <aside className="w-80 bg-white border-l border-slate-200 flex flex-col shrink-0">
+    <>
       <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
         <h2 className="font-semibold text-slate-900">Manual entry</h2>
         <button
@@ -47,7 +47,7 @@ export function TransactionHeader({
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-5 space-y-5">
+      <div className="p-5 space-y-5">
         <div className="bg-blue-50 text-blue-700 text-xs p-3 rounded-lg">
           Required workflow: Identify documents, customer, then payment route.
         </div>
@@ -102,9 +102,7 @@ export function TransactionHeader({
                   >
                     {c.name}
                     {c.tinNo ? (
-                      <span className="text-xs text-slate-400 ml-2">
-                        TIN: {c.tinNo}
-                      </span>
+                      <span className="text-slate-400 ml-1">· {c.tinNo}</span>
                     ) : null}
                   </button>
                 </li>
@@ -115,77 +113,30 @@ export function TransactionHeader({
             <button
               type="button"
               onClick={onRegisterCustomer}
-              className="mt-2 text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1"
+              className="mt-2 text-xs text-blue-600 hover:underline flex items-center gap-1"
             >
-              <Plus size={14} /> Register a new customer
+              <Plus size={12} /> Register new customer
             </button>
           )}
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-slate-700 mb-2">
-            Payment Method <span className="text-red-500">*</span>
+          <label className="block text-sm font-medium text-slate-700 mb-1.5">
+            Payment method <span className="text-red-500">*</span>
           </label>
-          <div className="flex gap-3">
-            <label className="flex-1 flex items-center gap-2 px-3 py-2 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50">
-              <input
-                type="radio"
-                name="payment"
-                checked={paymentMethod === "CASH"}
-                onChange={() => onPaymentMethodChange("CASH")}
-                className="text-blue-600"
-              />
-              <span className="text-sm">Cash</span>
-            </label>
-            <label className="flex-1 flex items-center gap-2 px-3 py-2 border border-slate-200 rounded-lg cursor-pointer hover:bg-slate-50">
-              <input
-                type="radio"
-                name="payment"
-                checked={paymentMethod === "CREDIT"}
-                onChange={() => onPaymentMethodChange("CREDIT")}
-                className="text-blue-600"
-              />
-              <span className="text-sm">Credit</span>
-            </label>
-          </div>
-        </div>
-
-        <div className="pt-4 border-t border-slate-100">
-          <h3 className="text-sm font-medium text-slate-900 mb-3">
-            Transaction summary
-          </h3>
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-slate-500">Gate Pass</span>
-              <span className={gatePassNo ? "text-slate-900" : "text-slate-400"}>
-                {gatePassNo || "Not entered"}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-500">FS No.</span>
-              <span className={fsNo ? "text-slate-900" : "text-slate-400"}>
-                {fsNo || "Not entered"}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-500">Customer</span>
-              <span
-                className={customer ? "text-slate-900" : "text-slate-400"}
-              >
-                {customer?.name || "Not selected"}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-500">Payment</span>
-              <span
-                className={paymentMethod ? "text-slate-900" : "text-slate-400"}
-              >
-                {paymentMethod || "Not selected"}
-              </span>
-            </div>
-          </div>
+          <select
+            value={paymentMethod}
+            onChange={(e) =>
+              onPaymentMethodChange(e.target.value as PaymentMethod)
+            }
+            className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">Select method</option>
+            <option value="CASH">Cash</option>
+            <option value="CREDIT">Credit</option>
+          </select>
         </div>
       </div>
-    </aside>
+    </>
   );
 }

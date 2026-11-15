@@ -243,6 +243,7 @@ export function PosForm() {
 
   return (
     <div className="flex-1 flex overflow-hidden">
+      {/* LEFT – main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
         <main className="flex-1 overflow-y-auto p-6">
           <div className="mb-6">
@@ -315,24 +316,15 @@ export function PosForm() {
             />
           </div>
 
-          {form.paymentMethod === "CASH" && (
-            <div className="mb-6 bg-white rounded-xl border border-slate-200 p-5">
-              <DepositAllocations
-                allocations={form.depositAllocations}
-                expectedTotal={totals.gateTotal}
-                onAdd={addDeposit}
-                onUpdate={updateDeposit}
-                onRemove={removeDeposit}
-              />
-            </div>
-          )}
+          {/* Deposit Allocations removed from left column */}
 
           <div className="bg-slate-900 text-white rounded-xl px-5 py-4 flex items-center justify-between">
             <div className="flex items-center gap-2 text-sm">
               <span className="w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center text-xs">
                 ✓
               </span>
-              Only Gate Pass Items deduct stock · Deposit total must match Gate Pass total
+              Only Gate Pass Items deduct stock · Deposit total must match Gate
+              Pass total
             </div>
             <button
               type="button"
@@ -347,40 +339,57 @@ export function PosForm() {
         </main>
       </div>
 
-      <TransactionHeader
-        gatePassNo={form.gatePassNo}
-        fsNo={form.fsNo}
-        customer={form.customer}
-        paymentMethod={form.paymentMethod}
-        customerSearch={customerSearch}
-        customerOptions={customerOptions}
-        onGatePassNoChange={(v) => setField("gatePassNo", v)}
-        onFsNoChange={(v) => setField("fsNo", v)}
-        onCustomerSearchChange={(v) => {
-          setCustomerSearch(v);
-          setField("customer", null);
-        }}
-        onSelectCustomer={(c) => {
-          setField("customer", c);
-          setCustomerSearch(c.name);
-          setCustomerOptions([]);
-        }}
-        onPaymentMethodChange={(v) => {
-          setField("paymentMethod", v);
-          if (v === "CASH" && form.depositAllocations.length === 0) {
-            addDeposit();
-          }
-        }}
-        onClear={() => {
-          clear();
-          setCustomerSearch("");
-          setCustomerOptions([]);
-          setSuccess("");
-          setError("");
-          void loadNextNumbers();
-        }}
-        onRegisterCustomer={handleRegisterCustomer}
-      />
+      {/* RIGHT – Transaction summary + Deposit Allocations below */}
+      <aside className="w-80 bg-white border-l border-slate-200 flex flex-col shrink-0 overflow-hidden">
+        <div className="flex-1 overflow-y-auto">
+          <TransactionHeader
+            gatePassNo={form.gatePassNo}
+            fsNo={form.fsNo}
+            customer={form.customer}
+            paymentMethod={form.paymentMethod}
+            customerSearch={customerSearch}
+            customerOptions={customerOptions}
+            onGatePassNoChange={(v) => setField("gatePassNo", v)}
+            onFsNoChange={(v) => setField("fsNo", v)}
+            onCustomerSearchChange={(v) => {
+              setCustomerSearch(v);
+              setField("customer", null);
+            }}
+            onSelectCustomer={(c) => {
+              setField("customer", c);
+              setCustomerSearch(c.name);
+              setCustomerOptions([]);
+            }}
+            onPaymentMethodChange={(v) => {
+              setField("paymentMethod", v);
+              if (v === "CASH" && form.depositAllocations.length === 0) {
+                addDeposit();
+              }
+            }}
+            onClear={() => {
+              clear();
+              setCustomerSearch("");
+              setCustomerOptions([]);
+              setSuccess("");
+              setError("");
+            }}
+            onRegisterCustomer={ensureCustomer}
+          />
+
+          {/* Cash Deposit Allocations – directly below transaction fields */}
+          {form.paymentMethod === "CASH" && (
+            <div className="border-t border-slate-100 p-5">
+              <DepositAllocations
+                allocations={form.depositAllocations}
+                expectedTotal={totals.gateTotal}
+                onAdd={addDeposit}
+                onUpdate={updateDeposit}
+                onRemove={removeDeposit}
+              />
+            </div>
+          )}
+        </div>
+      </aside>
     </div>
   );
 }
