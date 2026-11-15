@@ -5,18 +5,14 @@ const { AppError } = require('../../middleware/error.middleware');
 const { parseSpreadsheet, getField } = require('../../utils/spreadsheet');
 const { toQtyString, toMoneyString, isPositive } = require('../../utils/money');
 
+// Preferred template headers for imported items (and general use)
 const TEMPLATE_HEADERS = [
-  'internalCode',
-  'name',
-  'description',
-  'category',
-  'unitOfMeasure',
-  'origin',
-  'batchCode',
-  'receivedQty',
-  'unitCost',
-  'supplierRef',
-  'receiptDate',
+  'NO.',
+  'Part Number',
+  'Chinese Description',
+  'English Description',
+  'Qty (stock in Djibouti)',
+  'Unit Price',
 ];
 
 function mapOrigin(value) {
@@ -28,20 +24,79 @@ function mapOrigin(value) {
 }
 
 function rowToProduct(row) {
-  const internalCode = getField(row, ['internalCode', 'internal_code', 'partNumber', 'part_number', 'sku']);
-  const name = getField(row, ['name', 'productName', 'product_name']);
-  const description = getField(row, ['description']) || null;
+  // Part Number (internalCode) — support new and legacy column names
+  const internalCode = getField(row, [
+    'Part Number',
+    'partNumber',
+    'part_number',
+    'internalCode',
+    'internal_code',
+    'sku',
+  ]);
+
+  // Chinese Description → name
+  const name = getField(row, [
+    'Chinese Description',
+    'chineseDescription',
+    'chinese_description',
+    'name',
+    'productName',
+    'product_name',
+  ]);
+
+  // English Description → description
+  const description =
+    getField(row, [
+      'English Description',
+      'englishDescription',
+      'english_description',
+      'description',
+    ]) || null;
+
   const category = getField(row, ['category']) || null;
-  const unitOfMeasure = getField(row, ['unitOfMeasure', 'unit_of_measure', 'uom']) || 'PCS';
-  const origin = mapOrigin(getField(row, ['origin', 'sourceType', 'source_type']));
-  const batchCode = getField(row, ['batchCode', 'batch_code']);
-  const receivedQty = getField(row, ['receivedQty', 'received_qty', 'stock', 'quantity']);
-  const unitCost = getField(row, ['unitCost', 'unit_cost', 'unitPrice', 'unit_price', 'price']);
+  const unitOfMeasure =
+    getField(row, ['unitOfMeasure', 'unit_of_measure', 'uom']) || 'PCS';
+
+  // Origin — default to IMPORTED for import files when not specified
+  let origin = mapOrigin(getField(row, ['origin', 'sourceType', 'source_type']));
+  if (!origin) {
+    // Files using the new imported-items columns are treated as IMPORTED
+    origin = 'IMPORTED';
+  }
+
+  const batchCode =
+    getField(row, ['batchCode', 'batch_code']) ||
+    (internalCode ? `${internalCode}-IMP` : null);
+
+  // Qty
+  const receivedQty = getField(row, [
+    'Qty (stock in Djibouti)',
+    'Qty',
+    'qty',
+    'quantity',
+    'receivedQty',
+    'received_qty',
+    'stock',
+  ]);
+
+  // Unit Price
+  const unitCost = getField(row, [
+    'Unit Price',
+    'unitPrice',
+    'unit_price',
+    'unitCost',
+    'unit_cost',
+    'price',
+  ]);
+
   const supplierRef = getField(row, ['supplierRef', 'supplier_ref']) || null;
   const receiptDate = getField(row, ['receiptDate', 'receipt_date']);
 
+  // Optional row number column
+  const no = getField(row, ['NO.', 'NO', 'no', 'No.']);
+
   return {
-    rowNumber: row.__row,
+    rowNumber: row.__row ?? no,
     internalCode,
     name,
     description,
@@ -58,17 +113,12 @@ function rowToProduct(row) {
 
 function buildTemplateCsv() {
   const sample = [
-    'LOC-20418',
+    '1',
+    'PN-10001',
+    '热敏收据纸 (80mm)',
     'Thermal Receipt Paper (80mm)',
-    '80mm POS paper roll',
-    'Packaging',
-    'PCS',
-    'Local',
-    'LOC-20418-B1',
     '100',
     '3.20',
-    'Local mill',
-    '2026-01-15',
   ];
   return `${TEMPLATE_HEADERS.join(',')}\n${sample.join(',')}\n`;
 }
@@ -108,7 +158,7 @@ class InventoryImportService {
         summary.errors.push({
           row: row.rowNumber,
           internalCode: row.internalCode || null,
-          message: 'internalCode and name are required',
+          message: 'Part Number and Chinese Description are required',
         });
         continue;
       }
@@ -119,7 +169,7 @@ class InventoryImportService {
         summary.errors.push({
           row: row.rowNumber,
           internalCode: row.internalCode,
-          message: 'Duplicate internalCode in this file',
+          message: 'Duplicate Part Number in this file',
         });
         continue;
       }
@@ -157,10 +207,16 @@ class InventoryImportService {
           }
 
           if (!row.origin) {
-            throw new AppError('origin must be Imported or Local when receivedQty is provided', 400);
+            throw new AppError(
+              'origin must be Imported or Local when quantity is provided',
+              400
+            );
           }
           if (!row.batchCode) {
-            throw new AppError('batchCode is required when receivedQty is provided', 400);
+            throw new AppError(
+              'batchCode is required when quantity is provided',
+              400
+            );
           }
 
           const existingBatch = await tx.stockSource.findUnique({

@@ -25,6 +25,7 @@ interface ProductRow {
   id: string;
   internalCode: string;
   name: string;
+  description: string | null;
   category: string | null;
   origin: string;
   price: string;
@@ -39,6 +40,7 @@ interface ProductsResponse {
     id: string;
     internalCode: string;
     name: string;
+    description?: string | null;
     category: string | null;
     primaryUnitCost: string | number | null;
     stockSummary: { imported: number; local: number; total: number };
@@ -102,7 +104,7 @@ export default function InventoryPage() {
   const [isQtyModalOpen, setIsQtyModalOpen] = useState(false);
   const [editProduct, setEditProduct] = useState<ProductRow | null>(null);
   const [qtyDelta, setQtyDelta] = useState("");
-  const [qtyReason, setQtyReason] = useState("Manual adjustment");
+  const [qtyReason, setQtyReason] = useState("Manual stock addition");
   const [savingQty, setSavingQty] = useState(false);
 
   const [search, setSearch] = useState("");
@@ -129,10 +131,10 @@ export default function InventoryPage() {
 
   // Add product form
   const [newCode, setNewCode] = useState("");
-  const [newName, setNewName] = useState("");
+  const [newName, setNewName] = useState(""); // Chinese Description
+  const [newDescription, setNewDescription] = useState(""); // English Description
   const [newCategory, setNewCategory] = useState("");
-  const [newUnit, setNewUnit] = useState("PCS");
-  const [newQuantity, setNewQuantity] = useState<string>("0");          // ← editable quantity
+  const [newQuantity, setNewQuantity] = useState<string>("0");
   const [newSourceType, setNewSourceType] = useState<"LOCAL" | "IMPORTED">("LOCAL");
   const [newUnitCost, setNewUnitCost] = useState<string>("");
   const [savingProduct, setSavingProduct] = useState(false);
@@ -165,6 +167,7 @@ export default function InventoryPage() {
           id: product.id,
           internalCode: product.internalCode,
           name: product.name,
+          description: product.description ?? null,
           category: product.category,
           origin: originLabel(
             product.stockSummary.imported,
@@ -239,8 +242,8 @@ export default function InventoryPage() {
   const resetNewProductForm = () => {
     setNewCode("");
     setNewName("");
+    setNewDescription("");
     setNewCategory("");
-    setNewUnit("PCS");
     setNewQuantity("0");
     setNewSourceType("LOCAL");
     setNewUnitCost("");
@@ -248,7 +251,7 @@ export default function InventoryPage() {
 
   const handleCreateProduct = async () => {
     if (!newCode.trim() || !newName.trim()) {
-      setError("Internal code and name are required.");
+      setError("Part Number and Chinese Description are required.");
       return;
     }
 
@@ -261,7 +264,6 @@ export default function InventoryPage() {
     setSavingProduct(true);
     setError("");
     try {
-      // 1. Create the product
       const created = await api<{
         success: boolean;
         data: { id: string; internalCode: string; name: string };
@@ -270,12 +272,12 @@ export default function InventoryPage() {
         body: JSON.stringify({
           internalCode: newCode.trim(),
           name: newName.trim(),
+          description: newDescription.trim() || null,
           category: newCategory.trim() || null,
-          unitOfMeasure: newUnit.trim() || "PCS",
+          unitOfMeasure: "PCS",
         }),
       });
 
-      // 2. If quantity > 0, create an initial stock source
       if (qty > 0 && created.data?.id) {
         const batchCode = `INIT-${Date.now().toString(36).toUpperCase()}`;
         await api("/inventory/stock-sources", {
@@ -305,17 +307,15 @@ export default function InventoryPage() {
   const openQtyEditor = (product: ProductRow) => {
     setEditProduct(product);
     setQtyDelta("");
-    setQtyReason("Manual adjustment");
+    setQtyReason("Manual stock addition");
     setIsQtyModalOpen(true);
   };
 
   const handleAdjustQuantity = async () => {
     if (!editProduct) return;
     const delta = Number(qtyDelta);
-    if (!delta || Number.isNaN(delta)) {
-      setError(
-        "Enter a non-zero quantity change (positive to add, negative to remove)."
-      );
+    if (!delta || Number.isNaN(delta) || delta <= 0) {
+      setError("Enter a positive quantity to add to stock.");
       return;
     }
     setSavingQty(true);
@@ -326,7 +326,7 @@ export default function InventoryPage() {
         body: JSON.stringify({
           productId: editProduct.id,
           quantity: delta,
-          reason: qtyReason.trim() || "Manual adjustment",
+          reason: qtyReason.trim() || "Manual stock addition",
         }),
       });
       setIsQtyModalOpen(false);
@@ -334,7 +334,7 @@ export default function InventoryPage() {
       await loadProducts();
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to adjust quantity"
+        err instanceof Error ? err.message : "Failed to add quantity"
       );
     } finally {
       setSavingQty(false);
@@ -436,7 +436,7 @@ export default function InventoryPage() {
               </p>
               <h1 className="text-2xl font-semibold text-slate-900">Inventory</h1>
               <p className="text-sm text-slate-500 mt-1">
-                Search, filter by low stock, sort by name, and adjust quantities.
+                Search, filter by low stock, sort by name, and add stock quantities.
               </p>
             </div>
             <div className="flex gap-2">
@@ -469,11 +469,13 @@ export default function InventoryPage() {
                   className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
                 />
                 <input
-                  type="text"
                   value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search name or internal code..."
-                  className="w-full pl-9 pr-4 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    setPage(1);
+                  }}
+                  placeholder="Search part number or description…"
+                  className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg"
                 />
               </div>
               <div className="flex flex-wrap gap-2">
@@ -483,18 +485,19 @@ export default function InventoryPage() {
                     setSourceType(e.target.value);
                     setPage(1);
                   }}
-                  className="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white"
+                  className="text-sm border border-slate-200 rounded-lg px-3 py-2 bg-white"
                 >
                   <option value="">All origins</option>
                   <option value="IMPORTED">Imported</option>
                   <option value="LOCAL">Local</option>
                 </select>
                 <button
+                  type="button"
                   onClick={() => {
                     setLowStockOnly((v) => !v);
                     setPage(1);
                   }}
-                  className={`px-3 py-2 text-sm border rounded-lg flex items-center gap-1.5 ${
+                  className={`px-3 py-2 text-sm rounded-lg border flex items-center gap-1.5 ${
                     lowStockOnly
                       ? "bg-amber-50 border-amber-200 text-amber-800"
                       : "border-slate-200 text-slate-600 hover:bg-slate-50"
@@ -526,18 +529,22 @@ export default function InventoryPage() {
                       className="text-left px-5 py-3 font-medium cursor-pointer"
                       onClick={() => toggleSort("internalCode")}
                     >
-                      Code {sortBy === "internalCode" && (sortDir === "asc" ? "↑" : "↓")}
+                      Part Number{" "}
+                      {sortBy === "internalCode" &&
+                        (sortDir === "asc" ? "↑" : "↓")}
                     </th>
                     <th
                       className="text-left px-5 py-3 font-medium cursor-pointer"
                       onClick={() => toggleSort("name")}
                     >
-                      Name {sortBy === "name" && (sortDir === "asc" ? "↑" : "↓")}
+                      Chinese Description{" "}
+                      {sortBy === "name" && (sortDir === "asc" ? "↑" : "↓")}
                     </th>
-                    <th className="text-left px-5 py-3 font-medium">Category</th>
-                    <th className="text-left px-5 py-3 font-medium">Origin</th>
-                    <th className="text-left px-5 py-3 font-medium">Unit cost</th>
-                    <th className="text-left px-5 py-3 font-medium">Stock</th>
+                    <th className="text-left px-5 py-3 font-medium">
+                      English Description
+                    </th>
+                    <th className="text-left px-5 py-3 font-medium">QTY</th>
+                    <th className="text-left px-5 py-3 font-medium">Unit Price</th>
                     <th className="text-left px-5 py-3 font-medium">Status</th>
                     <th className="text-right px-5 py-3 font-medium">Actions</th>
                   </tr>
@@ -545,25 +552,30 @@ export default function InventoryPage() {
                 <tbody className="divide-y divide-slate-100">
                   {loading ? (
                     <tr>
-                      <td colSpan={8} className="px-5 py-12 text-center text-slate-500">
+                      <td colSpan={7} className="px-5 py-12 text-center text-slate-500">
                         Loading products…
                       </td>
                     </tr>
                   ) : products.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-5 py-12 text-center text-slate-500">
+                      <td colSpan={7} className="px-5 py-12 text-center text-slate-500">
                         No products found.
                       </td>
                     </tr>
                   ) : (
                     products.map((p) => (
                       <tr key={p.id} className="hover:bg-slate-50">
-                        <td className="px-5 py-3 font-mono text-xs">{p.internalCode}</td>
-                        <td className="px-5 py-3 font-medium text-slate-900">{p.name}</td>
-                        <td className="px-5 py-3">{p.category || "—"}</td>
-                        <td className="px-5 py-3">{p.origin}</td>
-                        <td className="px-5 py-3">{p.price}</td>
+                        <td className="px-5 py-3 font-mono text-xs">
+                          {p.internalCode}
+                        </td>
+                        <td className="px-5 py-3 font-medium text-slate-900">
+                          {p.name}
+                        </td>
+                        <td className="px-5 py-3 text-slate-600">
+                          {p.description || "—"}
+                        </td>
                         <td className="px-5 py-3 font-medium">{p.stock}</td>
+                        <td className="px-5 py-3">{p.price}</td>
                         <td className="px-5 py-3">
                           <span
                             className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
@@ -581,7 +593,7 @@ export default function InventoryPage() {
                           <button
                             onClick={() => openQtyEditor(p)}
                             className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"
-                            title="Edit quantity"
+                            title="Add stock"
                           >
                             <Pencil size={16} />
                           </button>
@@ -596,21 +608,21 @@ export default function InventoryPage() {
             {pagination.totalPages > 1 && (
               <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between text-sm">
                 <span className="text-slate-500">
-                  Page {pagination.page} of {pagination.totalPages} · {pagination.total}{" "}
-                  products
+                  Page {pagination.page} of {pagination.totalPages} ·{" "}
+                  {pagination.total} products
                 </span>
                 <div className="flex gap-2">
                   <button
                     disabled={page <= 1}
                     onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    className="px-3 py-1.5 border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-50"
+                    className="px-3 py-1.5 border border-slate-200 rounded-lg disabled:opacity-40"
                   >
                     Previous
                   </button>
                   <button
                     disabled={page >= pagination.totalPages}
                     onClick={() => setPage((p) => p + 1)}
-                    className="px-3 py-1.5 border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-50"
+                    className="px-3 py-1.5 border border-slate-200 rounded-lg disabled:opacity-40"
                   >
                     Next
                   </button>
@@ -621,7 +633,7 @@ export default function InventoryPage() {
         </main>
       </div>
 
-      {/* ========== Add New Product Modal (with editable Quantity) ========== */}
+      {/* ========== Add New Product Modal ========== */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
@@ -631,7 +643,7 @@ export default function InventoryPage() {
             <div className="space-y-3">
               <div>
                 <label className="block text-sm text-slate-600 mb-1">
-                  Internal code *
+                  Part Number *
                 </label>
                 <input
                   value={newCode}
@@ -641,12 +653,25 @@ export default function InventoryPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm text-slate-600 mb-1">Name *</label>
+                <label className="block text-sm text-slate-600 mb-1">
+                  Chinese Description *
+                </label>
                 <input
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-                  placeholder="Product name"
+                  placeholder="Chinese description"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-600 mb-1">
+                  English Description
+                </label>
+                <input
+                  value={newDescription}
+                  onChange={(e) => setNewDescription(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                  placeholder="English description"
                 />
               </div>
               <div>
@@ -657,19 +682,36 @@ export default function InventoryPage() {
                   className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
                 />
               </div>
+
+              <div>
+                <label className="block text-sm text-slate-600 mb-1">Origin *</label>
+                <select
+                  value={newSourceType}
+                  onChange={(e) =>
+                    setNewSourceType(e.target.value as "LOCAL" | "IMPORTED")
+                  }
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
+                >
+                  <option value="LOCAL">Local</option>
+                  <option value="IMPORTED">Imported</option>
+                </select>
+              </div>
+
               <div>
                 <label className="block text-sm text-slate-600 mb-1">
-                  Unit of measure
+                  Unit Price
                 </label>
                 <input
-                  value={newUnit}
-                  onChange={(e) => setNewUnit(e.target.value)}
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={newUnitCost}
+                  onChange={(e) => setNewUnitCost(e.target.value)}
                   className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-                  placeholder="PCS"
+                  placeholder="0.00"
                 />
               </div>
 
-              {/* Editable quantity field */}
               <div className="border-t border-slate-100 pt-3 mt-1">
                 <label className="block text-sm font-medium text-slate-700 mb-1">
                   Initial quantity
@@ -684,43 +726,9 @@ export default function InventoryPage() {
                   placeholder="0"
                 />
                 <p className="text-xs text-slate-500 mt-1">
-                  Leave 0 to create the product with no stock. You can adjust later.
+                  Leave 0 to create the product with no stock. You can add stock later.
                 </p>
               </div>
-
-              {Number(newQuantity) > 0 && (
-                <>
-                  <div>
-                    <label className="block text-sm text-slate-600 mb-1">
-                      Source type
-                    </label>
-                    <select
-                      value={newSourceType}
-                      onChange={(e) =>
-                        setNewSourceType(e.target.value as "LOCAL" | "IMPORTED")
-                      }
-                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
-                    >
-                      <option value="LOCAL">Local</option>
-                      <option value="IMPORTED">Imported</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm text-slate-600 mb-1">
-                      Unit cost (optional)
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={newUnitCost}
-                      onChange={(e) => setNewUnitCost(e.target.value)}
-                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-                      placeholder="0.00"
-                    />
-                  </div>
-                </>
-              )}
             </div>
 
             <div className="mt-5 flex justify-end gap-2">
@@ -740,7 +748,7 @@ export default function InventoryPage() {
                 onClick={handleCreateProduct}
                 className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg disabled:opacity-60"
               >
-                {savingProduct ? "Saving…" : "Create"}
+                {savingProduct ? "Saving…" : "Create product"}
               </button>
             </div>
           </div>
@@ -754,6 +762,10 @@ export default function InventoryPage() {
             <h2 className="text-lg font-semibold text-slate-900 mb-4">
               Import products
             </h2>
+            <p className="text-xs text-slate-500 mb-3">
+              Supported columns for imported items: NO., Part Number, Chinese
+              Description, English Description, Qty (stock in Djibouti), Unit Price
+            </p>
             <input
               type="file"
               accept=".csv,.xlsx,.xls,.txt"
@@ -801,12 +813,12 @@ export default function InventoryPage() {
         </div>
       )}
 
-      {/* Quantity adjust modal */}
+      {/* Quantity add modal (add only) */}
       {isQtyModalOpen && editProduct && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
             <h2 className="text-lg font-semibold text-slate-900 mb-1">
-              Adjust quantity
+              Add stock
             </h2>
             <p className="text-sm text-slate-500 mb-4">
               {editProduct.name} ({editProduct.internalCode}) · Current stock:{" "}
@@ -815,14 +827,16 @@ export default function InventoryPage() {
             <div className="space-y-3">
               <div>
                 <label className="block text-sm text-slate-600 mb-1">
-                  Quantity change (+ to add, − to remove)
+                  Quantity to add
                 </label>
                 <input
                   type="number"
+                  min={0.0001}
+                  step="any"
                   value={qtyDelta}
                   onChange={(e) => setQtyDelta(e.target.value)}
                   className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
-                  placeholder="e.g. 10 or -5"
+                  placeholder="e.g. 10"
                 />
               </div>
               <div>
@@ -851,7 +865,7 @@ export default function InventoryPage() {
                 onClick={handleAdjustQuantity}
                 className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg disabled:opacity-60"
               >
-                {savingQty ? "Saving…" : "Apply"}
+                {savingQty ? "Saving…" : "Add stock"}
               </button>
             </div>
           </div>
