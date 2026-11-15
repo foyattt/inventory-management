@@ -49,6 +49,13 @@ export async function getTransactionById(id: string) {
   }>(`/pos/transactions/${id}`);
 }
 
+export async function getNextNumbers() {
+  return api<{
+    success: boolean;
+    data: { gatePassNo: string; fsNo: string };
+  }>("/pos/next-numbers");
+}
+
 export async function searchCustomers(search: string, limit = 10) {
   const query = new URLSearchParams({
     search,

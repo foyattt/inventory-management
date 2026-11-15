@@ -30,7 +30,7 @@ class InventoryService {
     return product;
   }
 
-  async getProducts({ search, category, isActive, sourceType, page = 1, limit = 20 }) {
+  async getProducts({ search, category, isActive, sourceType, lowStock, sortBy = 'name', sortDir = 'asc', page = 1, limit = 20 }) {
     const { skip, take, page: pageNum, limit: limitNum } = paginate(page, limit);
 
     const where = {};
@@ -48,28 +48,34 @@ class InventoryService {
       where.stockSources = { some: { sourceType } };
     }
 
-    const [products, total] = await Promise.all([
-      prisma.product.findMany({
-        where,
-        include: {
-          stockSources: {
-            select: {
-              id: true,
-              sourceType: true,
-              currentBalance: true,
-              batchCode: true,
-              unitCost: true,
-            },
+    const orderField = sortBy === 'internalCode' ? 'internalCode' : 'name';
+    const orderDirection = sortDir === 'desc' ? 'desc' : 'asc';
+
+    // When lowStock filter is requested we fetch a larger set then filter in memory
+    // because stock is derived from stockSources balances.
+    const lowStockOnly = lowStock === 'true' || lowStock === true;
+    const fetchTake = lowStockOnly ? 5000 : take;
+    const fetchSkip = lowStockOnly ? 0 : skip;
+
+    const products = await prisma.product.findMany({
+      where,
+      include: {
+        stockSources: {
+          select: {
+            id: true,
+            sourceType: true,
+            currentBalance: true,
+            batchCode: true,
+            unitCost: true,
           },
         },
-        orderBy: { name: 'asc' },
-        skip,
-        take,
-      }),
-      prisma.product.count({ where }),
-    ]);
+      },
+      orderBy: { [orderField]: orderDirection },
+      skip: fetchSkip,
+      take: fetchTake,
+    });
 
-    const productsWithStock = products.map((product) => {
+    let productsWithStock = products.map((product) => {
       const importedQty = product.stockSources
         .filter((s) => s.sourceType === 'IMPORTED')
         .reduce((sum, s) => qtyAdd(sum, s.currentBalance), '0.0000');
@@ -91,6 +97,16 @@ class InventoryService {
         primaryUnitCost: primaryCost,
       };
     });
+
+    if (lowStockOnly) {
+      // Reorder threshold matches frontend stockStatus (< 30)
+      productsWithStock = productsWithStock.filter((p) => p.stockSummary.total < 30);
+    }
+
+    const total = lowStockOnly ? productsWithStock.length : await prisma.product.count({ where });
+    if (lowStockOnly) {
+      productsWithStock = productsWithStock.slice(skip, skip + take);
+    }
 
     return {
       data: productsWithStock,

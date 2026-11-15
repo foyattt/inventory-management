@@ -35,6 +35,8 @@ const reconciliationRoutes = require('./modules/reconciliation/reconciliation.ro
 // System settings (tax rate, thresholds, etc.)
 const settingsRoutes = require('./modules/settings/settings.routes');
 
+const reportsRoutes = require('./modules/reports/reports.routes');
+
 // App Initialization
 
 const app = express();
@@ -83,6 +85,7 @@ app.use('/api/customers', customerRoutes);        // /api/customers
 app.use('/api/credit', creditRoutes);             // /api/credit, /payments
 app.use('/api/reconciliation', reconciliationRoutes); // /api/reconciliation
 app.use('/api/settings', settingsRoutes);         // /api/settings
+app.use('/api/reports', reportsRoutes);           // /api/reports/dashboard
 
 
 // 404 & Global Error Handlers

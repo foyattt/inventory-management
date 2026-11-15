@@ -1,4 +1,5 @@
-import { ReactNode } from "react";
+// frontend/src/pages/ReportsPage.tsx
+import { ReactNode, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -15,58 +16,152 @@ import {
   ArrowRight,
   HelpCircle,
 } from "lucide-react";
+import { ApiError, api, formatMoney } from "../api/client";
+
+interface DashboardData {
+  metrics: {
+    weeklySales: string;
+    weeklyTransactionCount: number;
+    productsInStock: number;
+    totalProducts: number;
+    lowStockCount: number;
+    stockValue: string;
+  };
+  salesByDay: Array<{ date: string; day: string; value: number }>;
+  lowStockItems: Array<{
+    id: string;
+    name: string;
+    sku: string;
+    units: number;
+    unitCost: number;
+  }>;
+  recentSales: Array<{
+    id: string;
+    gatePassNo: string;
+    fsNo: string;
+    customer: string;
+    itemsSold: number;
+    recordedAt: string;
+    total: string;
+  }>;
+  period: { from: string; to: string };
+}
+
+function NavItem({
+  to,
+  icon,
+  label,
+  active = false,
+}: {
+  to: string;
+  icon: ReactNode;
+  label: string;
+  active?: boolean;
+}) {
+  return (
+    <Link
+      to={to}
+      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+        active
+          ? "bg-blue-600 text-white"
+          : "text-slate-400 hover:bg-slate-800 hover:text-white"
+      }`}
+    >
+      {icon}
+      {label}
+    </Link>
+  );
+}
+
+function formatDateLabel(iso: string) {
+  try {
+    return new Date(iso).toLocaleDateString(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  } catch {
+    return iso;
+  }
+}
 
 export default function ReportsPage() {
-  const metrics = [
-    {
-      title: "Weekly sales",
-      value: "$171,590",
-      subtitle: "5 live POS transactions included",
-      status: "success",
-    },
-    {
-      title: "Products in stock",
-      value: "5",
-      subtitle: "5 of 5 distinct products available",
-      status: "success",
-    },
-    {
-      title: "Low stock items",
-      value: "3",
-      subtitle: "At or below reorder threshold",
-      status: "warning",
-    },
-    {
-      title: "Stock value",
-      value: "$30,035",
-      subtitle: "Current inventory valuation",
-      status: "success",
-    },
-  ];
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const salesData = [
-    { day: "Mon", value: 45 },
-    { day: "Tue", value: 52 },
-    { day: "Wed", value: 38 },
-    { day: "Thu", value: 65 },
-    { day: "Fri", value: 72 },
-    { day: "Sat", value: 68 },
-    { day: "Sun", value: 85 },
-  ];
+  const load = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await api<{ success: boolean; data: DashboardData }>(
+        "/reports/dashboard"
+      );
+      setData(res.data);
+    } catch (err) {
+      setData(null);
+      if (err instanceof ApiError && err.status === 401) {
+        setError("Sign in to load live reports.");
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to load reports");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  const stockItems = [
-    { name: "POS Terminal X4", sku: "SKU-001A", units: 0, max: 50 },
-    { name: "Industrial Label Printer", sku: "SKU-002B", units: 18, max: 50 },
-    { name: "Thermal Receipt Paper (80mm)", sku: "SKU-003C", units: 24, max: 100 },
-    { name: "Countertop Display Stand", sku: "SKU-004D", units: 73, max: 100 },
-    { name: "Wireless Barcode Scanner", sku: "SKU-005E", units: 148, max: 200 },
-  ];
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const metrics = data
+    ? [
+        {
+          title: "Weekly sales",
+          value: formatMoney(data.metrics.weeklySales),
+          subtitle: `${data.metrics.weeklyTransactionCount} live POS transaction${
+            data.metrics.weeklyTransactionCount === 1 ? "" : "s"
+          } included`,
+          status: "success" as const,
+        },
+        {
+          title: "Products in stock",
+          value: String(data.metrics.productsInStock),
+          subtitle: `${data.metrics.productsInStock} of ${data.metrics.totalProducts} distinct products available`,
+          status: "success" as const,
+        },
+        {
+          title: "Low stock items",
+          value: String(data.metrics.lowStockCount),
+          subtitle: "At or below reorder threshold (< 30)",
+          status:
+            data.metrics.lowStockCount > 0
+              ? ("warning" as const)
+              : ("success" as const),
+        },
+        {
+          title: "Stock value",
+          value: formatMoney(data.metrics.stockValue),
+          subtitle: "Current inventory valuation",
+          status: "success" as const,
+        },
+      ]
+    : [];
+
+  const salesData = data?.salesByDay ?? [];
+  const maxSales = Math.max(...salesData.map((d) => d.value), 1);
+  const stockItems = data?.lowStockItems ?? [];
+  const maxUnits = Math.max(...stockItems.map((i) => i.units), 1);
+  const recentSales = data?.recentSales ?? [];
+
+  const periodLabel =
+    data?.period != null
+      ? `${formatDateLabel(data.period.from)} – ${formatDateLabel(data.period.to)}`
+      : "Last 7 days";
 
   return (
     <div className="flex h-screen bg-slate-50">
-      {/* Sidebar */}
       <aside className="w-64 bg-slate-900 text-white flex flex-col">
-        {/* Logo */}
         <div className="px-6 py-5 flex items-center gap-2 border-b border-slate-800">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-sm">
             S
@@ -74,21 +169,22 @@ export default function ReportsPage() {
           <span className="font-semibold text-lg">ZeSino</span>
         </div>
 
-        {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1">
           <p className="px-3 text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
             Workspace
           </p>
-
           <NavItem to="/" icon={<LayoutDashboard size={18} />} label="Reports" active />
           <NavItem to="/inventory" icon={<Package size={18} />} label="Inventory" />
           <NavItem to="/pos" icon={<ShoppingCart size={18} />} label="Point of Sale" />
-          <NavItem to="/reconciliation" icon={<RefreshCw size={18} />} label="Reconciliation" />
+          <NavItem
+            to="/reconciliation"
+            icon={<RefreshCw size={18} />}
+            label="Reconciliation"
+          />
           <NavItem to="/credit" icon={<CreditCard size={18} />} label="Credit" />
           <NavItem to="/customer" icon={<Users size={18} />} label="Customer" />
         </nav>
 
-        {/* Help box */}
         <div className="p-4">
           <div className="bg-slate-800 rounded-xl p-4">
             <div className="flex items-center gap-2 mb-2">
@@ -105,137 +201,193 @@ export default function ReportsPage() {
         </div>
       </aside>
 
-      {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top bar */}
         <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6">
           <div className="text-sm text-slate-500">
             ZeSino <span className="mx-1">/</span>{" "}
             <span className="text-slate-900 font-medium">Reports</span>
           </div>
           <div className="flex items-center gap-4">
+            <Link to="/login" className="text-sm text-blue-600 hover:text-blue-700">
+              Sign in
+            </Link>
             <button className="relative p-2 text-slate-500 hover:text-slate-700">
               <Bell size={18} />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full"></span>
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full" />
             </button>
             <div className="flex items-center gap-2 text-sm text-slate-600">
               <Calendar size={16} />
-              <span>Saturday, 24 May</span>
+              <span>
+                {new Date().toLocaleDateString(undefined, {
+                  weekday: "long",
+                  day: "numeric",
+                  month: "short",
+                })}
+              </span>
             </div>
           </div>
         </header>
 
-        {/* Page content */}
         <main className="flex-1 overflow-y-auto p-6">
-          {/* Header */}
           <div className="flex items-start justify-between mb-6">
             <div>
               <h1 className="text-2xl font-semibold text-slate-900">Reports</h1>
               <p className="text-sm text-slate-500 mt-1">
-                Sales and stock analytics for 19–25 May 2025.
+                Sales and stock analytics for {periodLabel}.
               </p>
             </div>
             <div className="flex items-center gap-3">
-              <button className="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white hover:bg-slate-50 flex items-center gap-2">
-                This week
-                <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
+              <button
+                type="button"
+                onClick={() => void load()}
+                className="px-4 py-2 text-sm border border-slate-200 bg-white rounded-lg hover:bg-slate-50 flex items-center gap-2"
+              >
+                <RefreshCw size={16} />
+                Refresh
               </button>
-              <button className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2">
+              <button
+                type="button"
+                className="px-4 py-2 text-sm border border-slate-200 bg-white rounded-lg hover:bg-slate-50 flex items-center gap-2"
+                title="Export uses on-screen data"
+              >
                 <Download size={16} />
-                Export report
+                Export
               </button>
             </div>
           </div>
 
+          {error && (
+            <div className="mb-4 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-xl px-4 py-3">
+              {error}{" "}
+              {error.includes("Sign in") && (
+                <Link to="/login" className="underline font-medium">
+                  Go to login
+                </Link>
+              )}
+            </div>
+          )}
+
+          {loading && (
+            <div className="mb-6 text-sm text-slate-500">Loading live reports…</div>
+          )}
+
           {/* Metric cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
-            {metrics.map((m) => (
-              <div key={m.title} className="bg-white rounded-xl border border-slate-200 p-5 relative">
-                <div className="absolute top-4 right-4">
-                  {m.status === "success" ? (
-                    <CheckCircle2 size={18} className="text-emerald-500" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
+            {(loading && !data
+              ? [
+                  { title: "Weekly sales", value: "—", subtitle: "…", status: "success" },
+                  { title: "Products in stock", value: "—", subtitle: "…", status: "success" },
+                  { title: "Low stock items", value: "—", subtitle: "…", status: "warning" },
+                  { title: "Stock value", value: "—", subtitle: "…", status: "success" },
+                ]
+              : metrics
+            ).map((m) => (
+              <div
+                key={m.title}
+                className="bg-white rounded-xl border border-slate-200 p-5"
+              >
+                <div className="flex items-start justify-between mb-3">
+                  <p className="text-sm text-slate-500">{m.title}</p>
+                  {m.status === "warning" ? (
+                    <AlertTriangle size={16} className="text-amber-500" />
                   ) : (
-                    <AlertTriangle size={18} className="text-amber-500" />
+                    <CheckCircle2 size={16} className="text-emerald-500" />
                   )}
                 </div>
-                <p className="text-sm text-slate-500">{m.title}</p>
-                <p className="text-2xl font-semibold text-slate-900 mt-1">{m.value}</p>
-                <p className="text-xs text-slate-400 mt-2">{m.subtitle}</p>
+                <p className="text-2xl font-semibold text-slate-900">{m.value}</p>
+                <p className="text-xs text-slate-400 mt-1">{m.subtitle}</p>
               </div>
             ))}
           </div>
 
-          {/* Charts row */}
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6">
-            {/* Sales performance */}
-            <div className="xl:col-span-2 bg-white rounded-xl border border-slate-200 p-5">
-              <div className="flex items-center justify-between mb-6">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-6">
+            {/* Sales chart */}
+            <div className="bg-white rounded-xl border border-slate-200 p-5">
+              <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h2 className="font-medium text-slate-900">Sales performance</h2>
-                  <p className="text-sm text-slate-500">Daily gross sales</p>
+                  <h2 className="font-medium text-slate-900">Sales this week</h2>
+                  <p className="text-sm text-slate-500">
+                    Gate Pass totals by day (last 7 days)
+                  </p>
                 </div>
-                <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full">
-                  +12.4% vs last week
-                </span>
               </div>
-
-              {/* Simple bar chart */}
-              <div className="flex items-end justify-between h-48 gap-3">
+              <div className="flex items-end gap-2 h-40">
+                {salesData.length === 0 && !loading && (
+                  <p className="text-sm text-slate-400 self-center w-full text-center">
+                    No sales in this period
+                  </p>
+                )}
                 {salesData.map((d) => (
-                  <div key={d.day} className="flex-1 flex flex-col items-center gap-2">
-                    <div className="w-full relative flex items-end justify-center h-40">
-                      <div
-                        className="w-full max-w-[48px] bg-blue-500 rounded-t-md transition-all"
-                        style={{ height: `${d.value}%` }}
-                      ></div>
-                    </div>
+                  <div
+                    key={d.date}
+                    className="flex-1 flex flex-col items-center gap-1"
+                  >
+                    <span className="text-[10px] text-slate-400">
+                      {d.value > 0 ? formatMoney(d.value) : ""}
+                    </span>
+                    <div
+                      className="w-full rounded-t-md bg-blue-500/80 min-h-[4px]"
+                      style={{
+                        height: `${Math.max(4, (d.value / maxSales) * 100)}%`,
+                      }}
+                      title={`${d.day}: ${formatMoney(d.value)}`}
+                    />
                     <span className="text-xs text-slate-500">{d.day}</span>
                   </div>
                 ))}
               </div>
             </div>
 
-            {/* Stock health */}
+            {/* Low stock */}
             <div className="bg-white rounded-xl border border-slate-200 p-5">
-              <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h2 className="font-medium text-slate-900">Stock health</h2>
-                  <p className="text-sm text-slate-500">Items requiring attention</p>
+                  <h2 className="font-medium text-slate-900">Low stock</h2>
+                  <p className="text-sm text-slate-500">
+                    Items below reorder threshold
+                  </p>
                 </div>
-                <button className="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1">
-                  View inventory <ArrowRight size={14} />
-                </button>
+                <Link
+                  to="/inventory"
+                  className="text-sm text-blue-600 hover:text-blue-700"
+                >
+                  View inventory
+                </Link>
               </div>
-
-              <div className="space-y-4">
+              <div className="space-y-3">
+                {stockItems.length === 0 && !loading && (
+                  <p className="text-sm text-slate-400 py-6 text-center">
+                    No low-stock items
+                  </p>
+                )}
                 {stockItems.map((item) => (
-                  <div key={item.sku}>
-                    <div className="flex items-start gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center shrink-0">
-                        <Package size={16} className="text-slate-500" />
+                  <div key={item.id} className="flex items-center gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <p className="text-sm font-medium text-slate-900 truncate">
+                          {item.name}
+                        </p>
+                        <span className="text-xs text-slate-500 whitespace-nowrap">
+                          {item.units} units
+                        </span>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-slate-900 truncate">{item.name}</p>
-                        <p className="text-xs text-slate-400">{item.sku}</p>
-                        <div className="mt-2 flex items-center gap-2">
-                          <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${
-                                item.units === 0
-                                  ? "bg-red-500"
-                                  : item.units < 30
-                                  ? "bg-amber-400"
-                                  : "bg-emerald-500"
-                              }`}
-                              style={{ width: `${Math.min((item.units / item.max) * 100, 100)}%` }}
-                            ></div>
-                          </div>
-                          <span className="text-xs text-slate-500 whitespace-nowrap">
-                            {item.units} units
-                          </span>
-                        </div>
+                      <p className="text-xs text-slate-400 mb-1">{item.sku}</p>
+                      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${
+                            item.units <= 0
+                              ? "bg-red-500"
+                              : item.units < 15
+                              ? "bg-amber-500"
+                              : "bg-blue-500"
+                          }`}
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              (item.units / Math.max(maxUnits, 30)) * 100
+                            )}%`,
+                          }}
+                        />
                       </div>
                     </div>
                   </div>
@@ -244,20 +396,21 @@ export default function ReportsPage() {
             </div>
           </div>
 
-          {/* Recent sales activity */}
+          {/* Recent sales */}
           <div className="bg-white rounded-xl border border-slate-200">
             <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
               <div>
                 <h2 className="font-medium text-slate-900">Recent sales activity</h2>
-                <p className="text-sm text-slate-500">Saved transactions update this report instantly</p>
+                <p className="text-sm text-slate-500">
+                  Saved transactions update this report instantly
+                </p>
               </div>
               <span className="text-xs font-medium text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full flex items-center gap-1">
-                <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
+                <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
                 Live data
               </span>
             </div>
 
-            {/* Table header */}
             <div className="grid grid-cols-5 gap-4 px-5 py-3 text-xs font-medium text-slate-500 border-b border-slate-100">
               <div>TRANSACTION</div>
               <div>CUSTOMER</div>
@@ -266,40 +419,50 @@ export default function ReportsPage() {
               <div className="text-right">TOTAL</div>
             </div>
 
-            {/* Empty state */}
-            <div className="py-16 flex flex-col items-center justify-center text-center">
-              <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-3">
-                <LayoutDashboard size={20} className="text-slate-400" />
+            {recentSales.length === 0 && !loading && (
+              <div className="py-16 flex flex-col items-center justify-center text-center">
+                <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mb-3">
+                  <LayoutDashboard size={20} className="text-slate-400" />
+                </div>
+                <p className="text-sm font-medium text-slate-700">
+                  No live sales yet
+                </p>
+                <p className="text-sm text-slate-400 mt-1">
+                  Saved POS transactions will appear here.
+                </p>
+                <Link
+                  to="/pos"
+                  className="mt-3 text-sm text-blue-600 hover:underline"
+                >
+                  Open Point of Sale
+                </Link>
               </div>
-              <p className="text-sm font-medium text-slate-700">No live sales yet</p>
-              <p className="text-sm text-slate-400 mt-1">Saved POS transactions will appear here.</p>
-            </div>
+            )}
+
+            {recentSales.map((tx) => (
+              <div
+                key={tx.id}
+                className="grid grid-cols-5 gap-4 px-5 py-3 text-sm border-b border-slate-50 hover:bg-slate-50"
+              >
+                <div className="font-medium text-slate-900">
+                  {tx.gatePassNo}
+                  <span className="block text-xs text-slate-400 font-normal">
+                    {tx.fsNo}
+                  </span>
+                </div>
+                <div className="text-slate-700">{tx.customer}</div>
+                <div className="text-slate-700">{tx.itemsSold}</div>
+                <div className="text-slate-500 text-xs">
+                  {new Date(tx.recordedAt).toLocaleString()}
+                </div>
+                <div className="text-right font-medium text-slate-900">
+                  {formatMoney(tx.total)}
+                </div>
+              </div>
+            ))}
           </div>
         </main>
       </div>
     </div>
-  );
-}
-
-interface NavItemProps {
-  to: string;
-  icon: ReactNode;
-  label: string;
-  active?: boolean;
-}
-
-function NavItem({ to, icon, label, active = false }: NavItemProps) {
-  return (
-    <Link
-      to={to}
-      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-        active
-          ? "bg-blue-600 text-white"
-          : "text-slate-400 hover:bg-slate-800 hover:text-white"
-      }`}
-    >
-      {icon}
-      {label}
-    </Link>
   );
 }

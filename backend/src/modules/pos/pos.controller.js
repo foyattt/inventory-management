@@ -39,6 +39,18 @@ class PosController {
       next(error);
     }
   }
+
+  async getNextNumbers(req, res, next) {
+    try {
+      const numbers = await posService.getNextNumbers();
+      res.status(200).json({
+        success: true,
+        data: numbers,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = new PosController();
