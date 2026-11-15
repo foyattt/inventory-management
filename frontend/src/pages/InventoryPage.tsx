@@ -1,4 +1,5 @@
-import { ChangeEvent, ReactNode, useEffect, useMemo, useState } from "react";
+// frontend/src/pages/InventoryPage.tsx
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -13,7 +14,6 @@ import {
   Search,
   Download,
   Pencil,
-  Trash2,
   HelpCircle,
   ArrowRight,
   Filter,
@@ -30,6 +30,7 @@ interface ProductRow {
   price: string;
   stock: number;
   status: string;
+  primaryUnitCost: number | null;
 }
 
 interface ProductsResponse {
@@ -69,20 +70,69 @@ function originLabel(imported: number, local: number): string {
   return "Local";
 }
 
+function NavItem({
+  to,
+  icon,
+  label,
+  active = false,
+}: {
+  to: string;
+  icon: React.ReactNode;
+  label: string;
+  active?: boolean;
+}) {
+  return (
+    <Link
+      to={to}
+      className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
+        active
+          ? "bg-blue-600 text-white"
+          : "text-slate-300 hover:bg-slate-800 hover:text-white"
+      }`}
+    >
+      {icon}
+      {label}
+    </Link>
+  );
+}
+
 export default function InventoryPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isQtyModalOpen, setIsQtyModalOpen] = useState(false);
+  const [editProduct, setEditProduct] = useState<ProductRow | null>(null);
+  const [qtyDelta, setQtyDelta] = useState("");
+  const [qtyReason, setQtyReason] = useState("Manual adjustment");
+  const [savingQty, setSavingQty] = useState(false);
+
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sourceType, setSourceType] = useState("");
+  const [lowStockOnly, setLowStockOnly] = useState(false);
+  const [sortBy, setSortBy] = useState<"name" | "internalCode">("name");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(1);
   const [products, setProducts] = useState<ProductRow[]>([]);
-  const [pagination, setPagination] = useState({ total: 0, page: 1, limit: 20, totalPages: 0 });
+  const [pagination, setPagination] = useState({
+    total: 0,
+    page: 1,
+    limit: 20,
+    totalPages: 0,
+  });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
-  const [importResult, setImportResult] = useState<ImportResult["data"] | null>(null);
+  const [importResult, setImportResult] = useState<ImportResult["data"] | null>(
+    null
+  );
   const [importing, setImporting] = useState(false);
+
+  // Add product form
+  const [newCode, setNewCode] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newCategory, setNewCategory] = useState("");
+  const [newUnit, setNewUnit] = useState("PCS");
+  const [savingProduct, setSavingProduct] = useState(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search), 300);
@@ -93,11 +143,14 @@ export default function InventoryPage() {
     const params = new URLSearchParams({
       page: String(page),
       limit: "20",
+      sortBy,
+      sortDir,
     });
     if (debouncedSearch) params.set("search", debouncedSearch);
     if (sourceType) params.set("sourceType", sourceType);
+    if (lowStockOnly) params.set("lowStock", "true");
     return params.toString();
-  }, [page, debouncedSearch, sourceType]);
+  }, [page, debouncedSearch, sourceType, lowStockOnly, sortBy, sortDir]);
 
   const loadProducts = async () => {
     setLoading(true);
@@ -110,10 +163,20 @@ export default function InventoryPage() {
           internalCode: product.internalCode,
           name: product.name,
           category: product.category,
-          origin: originLabel(product.stockSummary.imported, product.stockSummary.local),
-          price: product.primaryUnitCost == null ? "—" : formatMoney(product.primaryUnitCost),
+          origin: originLabel(
+            product.stockSummary.imported,
+            product.stockSummary.local
+          ),
+          price:
+            product.primaryUnitCost == null
+              ? "—"
+              : formatMoney(product.primaryUnitCost),
           stock: product.stockSummary.total,
           status: stockStatus(product.stockSummary.total),
+          primaryUnitCost:
+            product.primaryUnitCost == null
+              ? null
+              : Number(product.primaryUnitCost),
         }))
       );
       setPagination(result.pagination);
@@ -122,7 +185,9 @@ export default function InventoryPage() {
       if (err instanceof ApiError && err.status === 401) {
         setError("Sign in to load inventory listings.");
       } else {
-        setError(err instanceof Error ? err.message : "Failed to load inventory");
+        setError(
+          err instanceof Error ? err.message : "Failed to load inventory"
+        );
       }
     } finally {
       setLoading(false);
@@ -181,7 +246,87 @@ export default function InventoryPage() {
     }
   };
 
-  const start = pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1;
+  const handleCreateProduct = async () => {
+    if (!newCode.trim() || !newName.trim()) {
+      setError("Internal code and name are required.");
+      return;
+    }
+    setSavingProduct(true);
+    setError("");
+    try {
+      await api("/inventory/products", {
+        method: "POST",
+        body: JSON.stringify({
+          internalCode: newCode.trim(),
+          name: newName.trim(),
+          category: newCategory.trim() || null,
+          unitOfMeasure: newUnit.trim() || "PCS",
+        }),
+      });
+      setIsModalOpen(false);
+      setNewCode("");
+      setNewName("");
+      setNewCategory("");
+      setNewUnit("PCS");
+      await loadProducts();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create product");
+    } finally {
+      setSavingProduct(false);
+    }
+  };
+
+  const openQtyEditor = (product: ProductRow) => {
+    setEditProduct(product);
+    setQtyDelta("");
+    setQtyReason("Manual adjustment");
+    setIsQtyModalOpen(true);
+  };
+
+  const handleAdjustQuantity = async () => {
+    if (!editProduct) return;
+    const delta = Number(qtyDelta);
+    if (!delta || Number.isNaN(delta)) {
+      setError(
+        "Enter a non-zero quantity change (positive to add, negative to remove)."
+      );
+      return;
+    }
+    setSavingQty(true);
+    setError("");
+    try {
+      await api("/inventory/adjustments", {
+        method: "POST",
+        body: JSON.stringify({
+          productId: editProduct.id,
+          quantity: delta,
+          reason: qtyReason.trim() || "Manual adjustment",
+        }),
+      });
+      setIsQtyModalOpen(false);
+      setEditProduct(null);
+      await loadProducts();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to adjust quantity"
+      );
+    } finally {
+      setSavingQty(false);
+    }
+  };
+
+  const toggleSort = (field: "name" | "internalCode") => {
+    if (sortBy === field) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortBy(field);
+      setSortDir("asc");
+    }
+    setPage(1);
+  };
+
+  const start =
+    pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1;
   const end = Math.min(pagination.page * pagination.limit, pagination.total);
 
   return (
@@ -198,11 +343,23 @@ export default function InventoryPage() {
           <p className="px-3 text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
             Workspace
           </p>
-
           <NavItem to="/" icon={<LayoutDashboard size={18} />} label="Reports" />
-          <NavItem to="/inventory" icon={<Package size={18} />} label="Inventory" active />
-          <NavItem to="/pos" icon={<ShoppingCart size={18} />} label="Point of Sale" />
-          <NavItem to="/reconciliation" icon={<RefreshCw size={18} />} label="Reconciliation" />
+          <NavItem
+            to="/inventory"
+            icon={<Package size={18} />}
+            label="Inventory"
+            active
+          />
+          <NavItem
+            to="/pos"
+            icon={<ShoppingCart size={18} />}
+            label="Point of Sale"
+          />
+          <NavItem
+            to="/reconciliation"
+            icon={<RefreshCw size={18} />}
+            label="Reconciliation"
+          />
           <NavItem to="/credit" icon={<CreditCard size={18} />} label="Credit" />
           <NavItem to="/customer" icon={<Users size={18} />} label="Customer" />
         </nav>
@@ -213,7 +370,9 @@ export default function InventoryPage() {
               <HelpCircle size={16} className="text-blue-400" />
               <span className="text-sm font-medium">Need assistance?</span>
             </div>
-            <p className="text-xs text-slate-400 mb-3">Visit the operations help center.</p>
+            <p className="text-xs text-slate-400 mb-3">
+              Visit the operations help center.
+            </p>
             <button className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
               Open help center <ArrowRight size={12} />
             </button>
@@ -233,11 +392,17 @@ export default function InventoryPage() {
             </Link>
             <button className="relative p-2 text-slate-500 hover:text-slate-700">
               <Bell size={18} />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full"></span>
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full" />
             </button>
             <div className="flex items-center gap-2 text-sm text-slate-600">
               <Calendar size={16} />
-              <span>Saturday, 24 May</span>
+              <span>
+                {new Date().toLocaleDateString(undefined, {
+                  weekday: "long",
+                  day: "numeric",
+                  month: "short",
+                })}
+              </span>
             </div>
           </div>
         </header>
@@ -248,18 +413,29 @@ export default function InventoryPage() {
               <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">
                 Catalogue
               </p>
-              <h1 className="text-2xl font-semibold text-slate-900">Inventory</h1>
+              <h1 className="text-2xl font-semibold text-slate-900">
+                Inventory
+              </h1>
               <p className="text-sm text-slate-500 mt-1">
-                Search, filter, and import products without changing the rest of the catalogue workflow.
+                Search, filter by low stock, sort by name, and adjust quantities.
               </p>
             </div>
-            <button
-              onClick={() => setIsModalOpen(true)}
-              className="px-4 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
-            >
-              <Plus size={16} />
-              Add new product
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setIsImportOpen(true)}
+                className="px-4 py-2.5 text-sm border border-slate-200 bg-white rounded-lg hover:bg-slate-50 flex items-center gap-2"
+              >
+                <Download size={16} />
+                Import
+              </button>
+              <button
+                onClick={() => setIsModalOpen(true)}
+                className="px-4 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
+              >
+                <Plus size={16} />
+                Add new product
+              </button>
+            </div>
           </div>
 
           {error && (
@@ -276,155 +452,172 @@ export default function InventoryPage() {
           <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
             <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center justify-between">
               <div className="relative w-full lg:w-96">
-                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <Search
+                  size={16}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                />
                 <input
                   type="text"
                   value={search}
                   onChange={(e) => {
-                    setPage(1);
                     setSearch(e.target.value);
+                    setPage(1);
                   }}
-                  placeholder="Search product, part number, or SKU..."
-                  className="w-full pl-9 pr-4 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Search by name or code…"
+                  className="w-full pl-10 pr-4 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  onClick={() => {
-                    setSourceType("");
+              <div className="flex flex-wrap gap-2 items-center">
+                <select
+                  value={sourceType}
+                  onChange={(e) => {
+                    setSourceType(e.target.value);
                     setPage(1);
                   }}
-                  className={`px-3 py-1.5 text-sm rounded-lg ${sourceType === "" ? "bg-slate-900 text-white" : "border border-slate-200 hover:bg-slate-50"}`}
+                  className="text-sm border border-slate-200 rounded-lg px-3 py-2"
                 >
-                  All
-                </button>
+                  <option value="">All origins</option>
+                  <option value="IMPORTED">Imported</option>
+                  <option value="LOCAL">Local</option>
+                </select>
                 <button
+                  type="button"
                   onClick={() => {
-                    setSourceType("IMPORTED");
+                    setLowStockOnly((v) => !v);
                     setPage(1);
                   }}
-                  className={`px-3 py-1.5 text-sm rounded-lg ${sourceType === "IMPORTED" ? "bg-slate-900 text-white" : "border border-slate-200 hover:bg-slate-50"}`}
+                  className={`text-sm px-3 py-2 rounded-lg border flex items-center gap-1.5 ${
+                    lowStockOnly
+                      ? "bg-amber-50 border-amber-300 text-amber-800"
+                      : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                  }`}
                 >
-                  Imported
-                </button>
-                <button
-                  onClick={() => {
-                    setSourceType("LOCAL");
-                    setPage(1);
-                  }}
-                  className={`px-3 py-1.5 text-sm rounded-lg ${sourceType === "LOCAL" ? "bg-slate-900 text-white" : "border border-slate-200 hover:bg-slate-50"}`}
-                >
-                  Local
-                </button>
-                <button className="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-1.5">
                   <Filter size={14} />
-                  Sort: Name
+                  Low stock
+                  {lowStockOnly && <X size={14} />}
                 </button>
                 <button
-                  onClick={() => setIsImportOpen(true)}
-                  className="px-3 py-1.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-1.5"
+                  type="button"
+                  onClick={() => toggleSort("name")}
+                  className="text-sm px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
                 >
-                  <Download size={14} />
-                  Excel importer
+                  Name {sortBy === "name" ? (sortDir === "asc" ? "↑" : "↓") : ""}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => toggleSort("internalCode")}
+                  className="text-sm px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                >
+                  Code{" "}
+                  {sortBy === "internalCode"
+                    ? sortDir === "asc"
+                      ? "↑"
+                      : "↓"
+                    : ""}
                 </button>
               </div>
             </div>
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-              <div>
-                <h2 className="font-medium text-slate-900">All products</h2>
-                <p className="text-sm text-slate-500">
-                  {loading ? "Loading..." : `${pagination.total} products in catalogue`}
-                </p>
-              </div>
-              <button className="text-sm text-slate-600 hover:text-slate-900 flex items-center gap-1.5">
-                <Download size={14} />
-                Export inventory
-              </button>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-xs text-slate-500">
+                  <tr>
+                    <th className="text-left px-5 py-3 font-medium">CODE</th>
+                    <th className="text-left px-5 py-3 font-medium">PRODUCT</th>
+                    <th className="text-left px-5 py-3 font-medium">CATEGORY</th>
+                    <th className="text-left px-5 py-3 font-medium">ORIGIN</th>
+                    <th className="text-left px-5 py-3 font-medium">PRICE</th>
+                    <th className="text-left px-5 py-3 font-medium">STOCK</th>
+                    <th className="text-left px-5 py-3 font-medium">STATUS</th>
+                    <th className="px-5 py-3" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {loading && (
+                    <tr>
+                      <td
+                        colSpan={8}
+                        className="px-5 py-10 text-center text-slate-500"
+                      >
+                        Loading…
+                      </td>
+                    </tr>
+                  )}
+                  {!loading && products.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={8}
+                        className="px-5 py-10 text-sm text-slate-500 text-center"
+                      >
+                        No products match these filters.
+                      </td>
+                    </tr>
+                  )}
+                  {!loading &&
+                    products.map((p) => (
+                      <tr key={p.id} className="hover:bg-slate-50">
+                        <td className="px-5 py-3 font-medium text-slate-900">
+                          {p.internalCode}
+                        </td>
+                        <td className="px-5 py-3 text-slate-900">{p.name}</td>
+                        <td className="px-5 py-3 text-slate-600">
+                          {p.category || "—"}
+                        </td>
+                        <td className="px-5 py-3 text-slate-600">{p.origin}</td>
+                        <td className="px-5 py-3 text-slate-900">{p.price}</td>
+                        <td className="px-5 py-3 font-medium">{p.stock}</td>
+                        <td className="px-5 py-3">
+                          <span
+                            className={`inline-flex text-xs font-medium px-2 py-0.5 rounded-full ${
+                              p.status === "In Stock"
+                                ? "bg-emerald-50 text-emerald-700"
+                                : p.status === "Reorder Required"
+                                ? "bg-amber-50 text-amber-700"
+                                : "bg-red-50 text-red-700"
+                            }`}
+                          >
+                            {p.status}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3">
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              title="Edit quantity"
+                              onClick={() => openQtyEditor(p)}
+                              className="p-1.5 text-slate-400 hover:text-blue-600 rounded"
+                            >
+                              <Pencil size={16} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
             </div>
-
-            <div className="grid grid-cols-12 gap-4 px-5 py-3 text-xs font-medium text-slate-500 border-b border-slate-100 bg-slate-50">
-              <div className="col-span-2">PART NUMBER</div>
-              <div className="col-span-3">PRODUCT NAME</div>
-              <div className="col-span-1">ORIGIN TYPE</div>
-              <div className="col-span-1">UNIT PRICE</div>
-              <div className="col-span-1">STOCK LEVEL</div>
-              <div className="col-span-2">STOCK STATUS</div>
-              <div className="col-span-2 text-right">ACTIONS</div>
-            </div>
-
-            <div className="divide-y divide-slate-100">
-              {products.map((product) => (
-                <div
-                  key={product.id}
-                  className="grid grid-cols-12 gap-4 px-5 py-4 items-center hover:bg-slate-50 transition-colors"
-                >
-                  <div className="col-span-2 text-sm font-medium text-slate-900">
-                    {product.internalCode}
-                  </div>
-                  <div className="col-span-3 flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-lg bg-slate-100 flex items-center justify-center shrink-0">
-                      <Package size={16} className="text-slate-500" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-slate-900">{product.name}</p>
-                      <p className="text-xs text-slate-400">{product.category || "Uncategorised"}</p>
-                    </div>
-                  </div>
-                  <div className="col-span-1">
-                    <span
-                      className={`inline-flex items-center gap-1.5 text-xs font-medium ${
-                        product.origin === "Local" ? "text-emerald-600" : "text-blue-600"
-                      }`}
-                    >
-                      <span
-                        className={`w-1.5 h-1.5 rounded-full ${
-                          product.origin === "Local" ? "bg-emerald-500" : "bg-blue-500"
-                        }`}
-                      ></span>
-                      {product.origin}
-                    </span>
-                  </div>
-                  <div className="col-span-1 text-sm text-slate-700">{product.price}</div>
-                  <div className="col-span-1 text-sm text-slate-700">{product.stock} units</div>
-                  <div className="col-span-2">
-                    <StatusBadge status={product.status} />
-                  </div>
-                  <div className="col-span-2 flex items-center justify-end gap-2">
-                    <button className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                      <Pencil size={16} />
-                    </button>
-                    <button className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-              {!loading && products.length === 0 && (
-                <div className="px-5 py-10 text-sm text-slate-500 text-center">No products match these filters.</div>
-              )}
-            </div>
-
-            <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between text-sm text-slate-500">
+            <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between text-sm text-slate-600">
               <span>
                 Showing {start}–{end} of {pagination.total}
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex gap-2">
                 <button
-                  onClick={() => setPage((current) => Math.max(1, current - 1))}
-                  disabled={pagination.page <= 1}
-                  className="px-3 py-1 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50"
+                  type="button"
+                  disabled={page <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  className="px-3 py-1.5 border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-50"
                 >
                   Previous
                 </button>
-                <button className="w-8 h-8 bg-slate-900 text-white rounded-lg text-sm">{pagination.page || 1}</button>
                 <button
-                  onClick={() => setPage((current) => current + 1)}
-                  disabled={pagination.page >= pagination.totalPages}
-                  className="px-3 py-1 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50"
+                  type="button"
+                  disabled={page >= pagination.totalPages}
+                  onClick={() =>
+                    setPage((p) => Math.min(pagination.totalPages, p + 1))
+                  }
+                  className="px-3 py-1.5 border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-50"
                 >
                   Next
                 </button>
@@ -434,146 +627,189 @@ export default function InventoryPage() {
         </main>
       </div>
 
+      {/* Add product modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setIsModalOpen(false)}></div>
-          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-lg mx-4">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h2 className="text-lg font-semibold text-slate-900 mb-4">
+              Add new product
+            </h2>
+            <div className="space-y-3">
               <div>
-                <h2 className="text-lg font-semibold text-slate-900">Add new product</h2>
-                <p className="text-sm text-slate-500">Create a new inventory record</p>
+                <label className="block text-sm text-slate-600 mb-1">
+                  Internal code *
+                </label>
+                <input
+                  value={newCode}
+                  onChange={(e) => setNewCode(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                />
               </div>
+              <div>
+                <label className="block text-sm text-slate-600 mb-1">
+                  Name *
+                </label>
+                <input
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-600 mb-1">
+                  Category
+                </label>
+                <input
+                  value={newCategory}
+                  onChange={(e) => setNewCategory(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-600 mb-1">
+                  Unit of measure
+                </label>
+                <input
+                  value={newUnit}
+                  onChange={(e) => setNewUnit(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
               <button
+                type="button"
                 onClick={() => setIsModalOpen(false)}
-                className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg"
+                className="px-4 py-2 text-sm border border-slate-200 rounded-lg"
               >
-                <X size={18} />
-              </button>
-            </div>
-            <div className="px-6 py-5 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">Part number</label>
-                  <input type="text" placeholder="e.g. LOC-20418" className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1.5">SKU</label>
-                  <input type="text" placeholder="e.g. PA-RCP-100" className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">Product name</label>
-                <input type="text" placeholder="Product name" className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg" />
-              </div>
-            </div>
-            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100">
-              <button onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg">
                 Cancel
               </button>
-              <button onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-                Add product
+              <button
+                type="button"
+                disabled={savingProduct}
+                onClick={handleCreateProduct}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg disabled:opacity-60"
+              >
+                {savingProduct ? "Saving…" : "Create"}
               </button>
             </div>
           </div>
         </div>
       )}
 
+      {/* Import modal */}
       {isImportOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setIsImportOpen(false)}></div>
-          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-lg mx-4">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-              <div>
-                <h2 className="text-lg font-semibold text-slate-900">Excel importer</h2>
-                <p className="text-sm text-slate-500">Upload CSV or Excel to create products and opening stock.</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h2 className="text-lg font-semibold text-slate-900 mb-4">
+              Import products
+            </h2>
+            <input
+              type="file"
+              accept=".csv,.xlsx,.xls,.txt"
+              onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                setImportFile(e.target.files?.[0] || null)
+              }
+              className="block w-full text-sm"
+            />
+            <button
+              type="button"
+              onClick={downloadTemplate}
+              className="mt-3 text-sm text-blue-600 hover:underline"
+            >
+              Download CSV template
+            </button>
+            {importResult && (
+              <div className="mt-3 text-xs text-slate-600 bg-slate-50 rounded-lg p-3">
+                Created: {importResult.created}, Stock sources:{" "}
+                {importResult.stockSourcesCreated}, Duplicates:{" "}
+                {importResult.duplicates}, Failed: {importResult.failed}
               </div>
-              <button onClick={() => setIsImportOpen(false)} className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg">
-                <X size={18} />
-              </button>
-            </div>
-            <div className="px-6 py-5 space-y-4">
-              <button onClick={() => void downloadTemplate()} className="text-sm text-blue-600 hover:text-blue-700">
-                Download CSV template
-              </button>
-              <input
-                type="file"
-                accept=".csv,.xlsx,.xls,.txt"
-                onChange={(event: ChangeEvent<HTMLInputElement>) => {
+            )}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsImportOpen(false);
                   setImportResult(null);
-                  setImportFile(event.target.files?.[0] || null);
+                  setImportFile(null);
                 }}
-                className="block w-full text-sm text-slate-600"
-              />
-              {importResult && (
-                <div className="text-sm bg-slate-50 rounded-lg p-3 space-y-1">
-                  <p>Created products: {importResult.created}</p>
-                  <p>Stock batches created: {importResult.stockSourcesCreated}</p>
-                  <p>Duplicates: {importResult.duplicates}</p>
-                  <p>Failed rows: {importResult.failed}</p>
-                  {importResult.errors.slice(0, 8).map((item) => (
-                    <p key={`${item.row}-${item.message}`} className="text-red-600">
-                      Row {item.row}: {item.message}
-                    </p>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100">
-              <button onClick={() => setIsImportOpen(false)} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg">
+                className="px-4 py-2 text-sm border border-slate-200 rounded-lg"
+              >
                 Close
               </button>
               <button
-                onClick={() => void onImport()}
-                disabled={importing}
-                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60"
+                type="button"
+                disabled={importing || !importFile}
+                onClick={onImport}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg disabled:opacity-60"
               >
-                {importing ? "Importing..." : "Import file"}
+                {importing ? "Importing…" : "Import"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quantity edit modal */}
+      {isQtyModalOpen && editProduct && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h2 className="text-lg font-semibold text-slate-900 mb-1">
+              Adjust quantity
+            </h2>
+            <p className="text-sm text-slate-500 mb-4">
+              {editProduct.name} ({editProduct.internalCode}) · Current stock:{" "}
+              {editProduct.stock}
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm text-slate-600 mb-1">
+                  Change (+ to add, − to remove) *
+                </label>
+                <input
+                  type="number"
+                  step="1"
+                  value={qtyDelta}
+                  onChange={(e) => setQtyDelta(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                  placeholder="e.g. 10 or -5"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-600 mb-1">
+                  Reason
+                </label>
+                <input
+                  value={qtyReason}
+                  onChange={(e) => setQtyReason(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsQtyModalOpen(false);
+                  setEditProduct(null);
+                }}
+                className="px-4 py-2 text-sm border border-slate-200 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={savingQty}
+                onClick={handleAdjustQuantity}
+                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg disabled:opacity-60"
+              >
+                {savingQty ? "Saving…" : "Apply"}
               </button>
             </div>
           </div>
         </div>
       )}
     </div>
-  );
-}
-
-interface NavItemProps {
-  to: string;
-  icon: ReactNode;
-  label: string;
-  active?: boolean;
-}
-
-function NavItem({ to, icon, label, active = false }: NavItemProps) {
-  return (
-    <Link
-      to={to}
-      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-        active ? "bg-blue-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"
-      }`}
-    >
-      {icon}
-      {label}
-    </Link>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    "In Stock": "bg-emerald-50 text-emerald-700",
-    "Reorder Required": "bg-amber-50 text-amber-700",
-    "Out of Stock": "bg-red-50 text-red-700",
-  };
-  const dots: Record<string, string> = {
-    "In Stock": "bg-emerald-500",
-    "Reorder Required": "bg-amber-500",
-    "Out of Stock": "bg-red-500",
-  };
-
-  return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${styles[status]}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${dots[status]}`}></span>
-      {status}
-    </span>
   );
 }
