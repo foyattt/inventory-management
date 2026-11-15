@@ -132,6 +132,9 @@ export default function InventoryPage() {
   const [newName, setNewName] = useState("");
   const [newCategory, setNewCategory] = useState("");
   const [newUnit, setNewUnit] = useState("PCS");
+  const [newQuantity, setNewQuantity] = useState<string>("0");          // ← editable quantity
+  const [newSourceType, setNewSourceType] = useState<"LOCAL" | "IMPORTED">("LOCAL");
+  const [newUnitCost, setNewUnitCost] = useState<string>("");
   const [savingProduct, setSavingProduct] = useState(false);
 
   useEffect(() => {
@@ -158,7 +161,7 @@ export default function InventoryPage() {
     try {
       const result = await api<ProductsResponse>(`/inventory/products?${query}`);
       setProducts(
-        result.data.map((product) => ({
+        (result.data || []).map((product) => ({
           id: product.id,
           internalCode: product.internalCode,
           name: product.name,
@@ -167,28 +170,21 @@ export default function InventoryPage() {
             product.stockSummary.imported,
             product.stockSummary.local
           ),
-          price:
-            product.primaryUnitCost == null
-              ? "—"
-              : formatMoney(product.primaryUnitCost),
+          price: formatMoney(product.primaryUnitCost),
           stock: product.stockSummary.total,
           status: stockStatus(product.stockSummary.total),
           primaryUnitCost:
-            product.primaryUnitCost == null
-              ? null
-              : Number(product.primaryUnitCost),
+            product.primaryUnitCost != null
+              ? Number(product.primaryUnitCost)
+              : null,
         }))
       );
-      setPagination(result.pagination);
+      setPagination(
+        result.pagination || { total: 0, page: 1, limit: 20, totalPages: 0 }
+      );
     } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to load products");
       setProducts([]);
-      if (err instanceof ApiError && err.status === 401) {
-        setError("Sign in to load inventory listings.");
-      } else {
-        setError(
-          err instanceof Error ? err.message : "Failed to load inventory"
-        );
-      }
     } finally {
       setLoading(false);
     }
@@ -198,43 +194,17 @@ export default function InventoryPage() {
     void loadProducts();
   }, [query]);
 
-  const onImport = async () => {
-    if (!importFile) {
-      setError("Choose a CSV or Excel file to import.");
-      return;
-    }
-    setImporting(true);
-    setError("");
-    try {
-      const form = new FormData();
-      form.append("file", importFile);
-      const result = await api<ImportResult>("/inventory/import", {
-        method: "POST",
-        body: form,
-      });
-      setImportResult(result.data);
-      await loadProducts();
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
-        setError("Sign in to use Excel importer.");
-      } else {
-        setError(err instanceof Error ? err.message : "Import failed");
-      }
-    } finally {
-      setImporting(false);
-    }
-  };
-
   const downloadTemplate = async () => {
     try {
       const token = getToken();
-      const response = await fetch("/api/inventory/import/template", {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!response.ok) {
-        throw new Error("Could not download template");
-      }
-      const blob = await response.blob();
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL ?? "/api"}/inventory/import/template`,
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        }
+      );
+      if (!res.ok) throw new Error("Failed to download template");
+      const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -246,15 +216,56 @@ export default function InventoryPage() {
     }
   };
 
+  const onImport = async () => {
+    if (!importFile) return;
+    setImporting(true);
+    setError("");
+    try {
+      const formData = new FormData();
+      formData.append("file", importFile);
+      const result = await api<ImportResult>("/inventory/import", {
+        method: "POST",
+        body: formData,
+      });
+      setImportResult(result.data);
+      await loadProducts();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Import failed");
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const resetNewProductForm = () => {
+    setNewCode("");
+    setNewName("");
+    setNewCategory("");
+    setNewUnit("PCS");
+    setNewQuantity("0");
+    setNewSourceType("LOCAL");
+    setNewUnitCost("");
+  };
+
   const handleCreateProduct = async () => {
     if (!newCode.trim() || !newName.trim()) {
       setError("Internal code and name are required.");
       return;
     }
+
+    const qty = Number(newQuantity);
+    if (Number.isNaN(qty) || qty < 0) {
+      setError("Quantity must be a non-negative number.");
+      return;
+    }
+
     setSavingProduct(true);
     setError("");
     try {
-      await api("/inventory/products", {
+      // 1. Create the product
+      const created = await api<{
+        success: boolean;
+        data: { id: string; internalCode: string; name: string };
+      }>("/inventory/products", {
         method: "POST",
         body: JSON.stringify({
           internalCode: newCode.trim(),
@@ -263,11 +274,26 @@ export default function InventoryPage() {
           unitOfMeasure: newUnit.trim() || "PCS",
         }),
       });
+
+      // 2. If quantity > 0, create an initial stock source
+      if (qty > 0 && created.data?.id) {
+        const batchCode = `INIT-${Date.now().toString(36).toUpperCase()}`;
+        await api("/inventory/stock-sources", {
+          method: "POST",
+          body: JSON.stringify({
+            productId: created.data.id,
+            sourceType: newSourceType,
+            batchCode,
+            receiptDate: new Date().toISOString().slice(0, 10),
+            receivedQty: qty,
+            unitCost: newUnitCost.trim() === "" ? null : Number(newUnitCost),
+            notes: "Initial stock on product creation",
+          }),
+        });
+      }
+
       setIsModalOpen(false);
-      setNewCode("");
-      setNewName("");
-      setNewCategory("");
-      setNewUnit("PCS");
+      resetNewProductForm();
       await loadProducts();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create product");
@@ -325,12 +351,9 @@ export default function InventoryPage() {
     setPage(1);
   };
 
-  const start =
-    pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1;
-  const end = Math.min(pagination.page * pagination.limit, pagination.total);
-
   return (
     <div className="flex h-screen bg-slate-50">
+      {/* Sidebar */}
       <aside className="w-64 bg-slate-900 text-white flex flex-col">
         <div className="px-6 py-5 flex items-center gap-2 border-b border-slate-800">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-sm">
@@ -380,6 +403,7 @@ export default function InventoryPage() {
         </div>
       </aside>
 
+      {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden">
         <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6">
           <div className="text-sm text-slate-500">
@@ -387,9 +411,6 @@ export default function InventoryPage() {
             <span className="text-slate-900 font-medium">Inventory</span>
           </div>
           <div className="flex items-center gap-4">
-            <Link to="/login" className="text-sm text-blue-600 hover:text-blue-700">
-              Sign in
-            </Link>
             <button className="relative p-2 text-slate-500 hover:text-slate-700">
               <Bell size={18} />
               <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full" />
@@ -411,11 +432,9 @@ export default function InventoryPage() {
           <div className="flex items-start justify-between mb-6">
             <div>
               <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">
-                Catalogue
+                Stock Control
               </p>
-              <h1 className="text-2xl font-semibold text-slate-900">
-                Inventory
-              </h1>
+              <h1 className="text-2xl font-semibold text-slate-900">Inventory</h1>
               <p className="text-sm text-slate-500 mt-1">
                 Search, filter by low stock, sort by name, and adjust quantities.
               </p>
@@ -423,35 +442,28 @@ export default function InventoryPage() {
             <div className="flex gap-2">
               <button
                 onClick={() => setIsImportOpen(true)}
-                className="px-4 py-2.5 text-sm border border-slate-200 bg-white rounded-lg hover:bg-slate-50 flex items-center gap-2"
+                className="px-4 py-2.5 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-2"
               >
                 <Download size={16} />
                 Import
               </button>
               <button
-                onClick={() => setIsModalOpen(true)}
+                onClick={() => {
+                  resetNewProductForm();
+                  setIsModalOpen(true);
+                }}
                 className="px-4 py-2.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
               >
                 <Plus size={16} />
-                Add new product
+                Add product
               </button>
             </div>
           </div>
 
-          {error && (
-            <div className="mb-4 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-xl px-4 py-3">
-              {error}{" "}
-              {error.includes("Sign in") && (
-                <Link to="/login" className="underline font-medium">
-                  Go to login
-                </Link>
-              )}
-            </div>
-          )}
-
+          {/* Filters */}
           <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
             <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center justify-between">
-              <div className="relative w-full lg:w-96">
+              <div className="relative w-full lg:w-80">
                 <Search
                   size={16}
                   className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
@@ -459,178 +471,160 @@ export default function InventoryPage() {
                 <input
                   type="text"
                   value={search}
-                  onChange={(e) => {
-                    setSearch(e.target.value);
-                    setPage(1);
-                  }}
-                  placeholder="Search by name or code…"
-                  className="w-full pl-10 pr-4 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search name or internal code..."
+                  className="w-full pl-9 pr-4 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-              <div className="flex flex-wrap gap-2 items-center">
+              <div className="flex flex-wrap gap-2">
                 <select
                   value={sourceType}
                   onChange={(e) => {
                     setSourceType(e.target.value);
                     setPage(1);
                   }}
-                  className="text-sm border border-slate-200 rounded-lg px-3 py-2"
+                  className="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white"
                 >
                   <option value="">All origins</option>
                   <option value="IMPORTED">Imported</option>
                   <option value="LOCAL">Local</option>
                 </select>
                 <button
-                  type="button"
                   onClick={() => {
                     setLowStockOnly((v) => !v);
                     setPage(1);
                   }}
-                  className={`text-sm px-3 py-2 rounded-lg border flex items-center gap-1.5 ${
+                  className={`px-3 py-2 text-sm border rounded-lg flex items-center gap-1.5 ${
                     lowStockOnly
-                      ? "bg-amber-50 border-amber-300 text-amber-800"
+                      ? "bg-amber-50 border-amber-200 text-amber-800"
                       : "border-slate-200 text-slate-600 hover:bg-slate-50"
                   }`}
                 >
                   <Filter size={14} />
                   Low stock
-                  {lowStockOnly && <X size={14} />}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => toggleSort("name")}
-                  className="text-sm px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
-                >
-                  Name {sortBy === "name" ? (sortDir === "asc" ? "↑" : "↓") : ""}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => toggleSort("internalCode")}
-                  className="text-sm px-3 py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
-                >
-                  Code{" "}
-                  {sortBy === "internalCode"
-                    ? sortDir === "asc"
-                      ? "↑"
-                      : "↓"
-                    : ""}
                 </button>
               </div>
             </div>
           </div>
 
+          {error && (
+            <div className="mb-4 px-4 py-3 text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg flex items-center justify-between">
+              <span>{error}</span>
+              <button onClick={() => setError("")} className="p-1">
+                <X size={14} />
+              </button>
+            </div>
+          )}
+
+          {/* Table */}
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-xs text-slate-500">
                   <tr>
-                    <th className="text-left px-5 py-3 font-medium">CODE</th>
-                    <th className="text-left px-5 py-3 font-medium">PRODUCT</th>
-                    <th className="text-left px-5 py-3 font-medium">CATEGORY</th>
-                    <th className="text-left px-5 py-3 font-medium">ORIGIN</th>
-                    <th className="text-left px-5 py-3 font-medium">PRICE</th>
-                    <th className="text-left px-5 py-3 font-medium">STOCK</th>
-                    <th className="text-left px-5 py-3 font-medium">STATUS</th>
-                    <th className="px-5 py-3" />
+                    <th
+                      className="text-left px-5 py-3 font-medium cursor-pointer"
+                      onClick={() => toggleSort("internalCode")}
+                    >
+                      Code {sortBy === "internalCode" && (sortDir === "asc" ? "↑" : "↓")}
+                    </th>
+                    <th
+                      className="text-left px-5 py-3 font-medium cursor-pointer"
+                      onClick={() => toggleSort("name")}
+                    >
+                      Name {sortBy === "name" && (sortDir === "asc" ? "↑" : "↓")}
+                    </th>
+                    <th className="text-left px-5 py-3 font-medium">Category</th>
+                    <th className="text-left px-5 py-3 font-medium">Origin</th>
+                    <th className="text-left px-5 py-3 font-medium">Unit cost</th>
+                    <th className="text-left px-5 py-3 font-medium">Stock</th>
+                    <th className="text-left px-5 py-3 font-medium">Status</th>
+                    <th className="text-right px-5 py-3 font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {loading && (
+                  {loading ? (
                     <tr>
-                      <td
-                        colSpan={8}
-                        className="px-5 py-10 text-center text-slate-500"
-                      >
-                        Loading…
+                      <td colSpan={8} className="px-5 py-12 text-center text-slate-500">
+                        Loading products…
                       </td>
                     </tr>
-                  )}
-                  {!loading && products.length === 0 && (
+                  ) : products.length === 0 ? (
                     <tr>
-                      <td
-                        colSpan={8}
-                        className="px-5 py-10 text-sm text-slate-500 text-center"
-                      >
-                        No products match these filters.
+                      <td colSpan={8} className="px-5 py-12 text-center text-slate-500">
+                        No products found.
                       </td>
                     </tr>
-                  )}
-                  {!loading &&
+                  ) : (
                     products.map((p) => (
                       <tr key={p.id} className="hover:bg-slate-50">
-                        <td className="px-5 py-3 font-medium text-slate-900">
-                          {p.internalCode}
-                        </td>
-                        <td className="px-5 py-3 text-slate-900">{p.name}</td>
-                        <td className="px-5 py-3 text-slate-600">
-                          {p.category || "—"}
-                        </td>
-                        <td className="px-5 py-3 text-slate-600">{p.origin}</td>
-                        <td className="px-5 py-3 text-slate-900">{p.price}</td>
+                        <td className="px-5 py-3 font-mono text-xs">{p.internalCode}</td>
+                        <td className="px-5 py-3 font-medium text-slate-900">{p.name}</td>
+                        <td className="px-5 py-3">{p.category || "—"}</td>
+                        <td className="px-5 py-3">{p.origin}</td>
+                        <td className="px-5 py-3">{p.price}</td>
                         <td className="px-5 py-3 font-medium">{p.stock}</td>
                         <td className="px-5 py-3">
                           <span
-                            className={`inline-flex text-xs font-medium px-2 py-0.5 rounded-full ${
+                            className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                               p.status === "In Stock"
-                                ? "bg-emerald-50 text-emerald-700"
+                                ? "bg-emerald-100 text-emerald-700"
                                 : p.status === "Reorder Required"
-                                ? "bg-amber-50 text-amber-700"
-                                : "bg-red-50 text-red-700"
+                                ? "bg-amber-100 text-amber-800"
+                                : "bg-red-100 text-red-700"
                             }`}
                           >
                             {p.status}
                           </span>
                         </td>
-                        <td className="px-5 py-3">
-                          <div className="flex items-center gap-1">
-                            <button
-                              type="button"
-                              title="Edit quantity"
-                              onClick={() => openQtyEditor(p)}
-                              className="p-1.5 text-slate-400 hover:text-blue-600 rounded"
-                            >
-                              <Pencil size={16} />
-                            </button>
-                          </div>
+                        <td className="px-5 py-3 text-right">
+                          <button
+                            onClick={() => openQtyEditor(p)}
+                            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg"
+                            title="Edit quantity"
+                          >
+                            <Pencil size={16} />
+                          </button>
                         </td>
                       </tr>
-                    ))}
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
-            <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between text-sm text-slate-600">
-              <span>
-                Showing {start}–{end} of {pagination.total}
-              </span>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={page <= 1}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="px-3 py-1.5 border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-50"
-                >
-                  Previous
-                </button>
-                <button
-                  type="button"
-                  disabled={page >= pagination.totalPages}
-                  onClick={() =>
-                    setPage((p) => Math.min(pagination.totalPages, p + 1))
-                  }
-                  className="px-3 py-1.5 border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-50"
-                >
-                  Next
-                </button>
+
+            {pagination.totalPages > 1 && (
+              <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between text-sm">
+                <span className="text-slate-500">
+                  Page {pagination.page} of {pagination.totalPages} · {pagination.total}{" "}
+                  products
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    disabled={page <= 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    className="px-3 py-1.5 border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-50"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    disabled={page >= pagination.totalPages}
+                    onClick={() => setPage((p) => p + 1)}
+                    className="px-3 py-1.5 border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-50"
+                  >
+                    Next
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </main>
       </div>
 
-      {/* Add product modal */}
+      {/* ========== Add New Product Modal (with editable Quantity) ========== */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
             <h2 className="text-lg font-semibold text-slate-900 mb-4">
               Add new product
             </h2>
@@ -643,22 +637,20 @@ export default function InventoryPage() {
                   value={newCode}
                   onChange={(e) => setNewCode(e.target.value)}
                   className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                  placeholder="e.g. PRD-001"
                 />
               </div>
               <div>
-                <label className="block text-sm text-slate-600 mb-1">
-                  Name *
-                </label>
+                <label className="block text-sm text-slate-600 mb-1">Name *</label>
                 <input
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                  placeholder="Product name"
                 />
               </div>
               <div>
-                <label className="block text-sm text-slate-600 mb-1">
-                  Category
-                </label>
+                <label className="block text-sm text-slate-600 mb-1">Category</label>
                 <input
                   value={newCategory}
                   onChange={(e) => setNewCategory(e.target.value)}
@@ -673,13 +665,71 @@ export default function InventoryPage() {
                   value={newUnit}
                   onChange={(e) => setNewUnit(e.target.value)}
                   className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                  placeholder="PCS"
                 />
               </div>
+
+              {/* Editable quantity field */}
+              <div className="border-t border-slate-100 pt-3 mt-1">
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Initial quantity
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={newQuantity}
+                  onChange={(e) => setNewQuantity(e.target.value)}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                  placeholder="0"
+                />
+                <p className="text-xs text-slate-500 mt-1">
+                  Leave 0 to create the product with no stock. You can adjust later.
+                </p>
+              </div>
+
+              {Number(newQuantity) > 0 && (
+                <>
+                  <div>
+                    <label className="block text-sm text-slate-600 mb-1">
+                      Source type
+                    </label>
+                    <select
+                      value={newSourceType}
+                      onChange={(e) =>
+                        setNewSourceType(e.target.value as "LOCAL" | "IMPORTED")
+                      }
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white"
+                    >
+                      <option value="LOCAL">Local</option>
+                      <option value="IMPORTED">Imported</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-slate-600 mb-1">
+                      Unit cost (optional)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={newUnitCost}
+                      onChange={(e) => setNewUnitCost(e.target.value)}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </>
+              )}
             </div>
+
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setIsModalOpen(false)}
+                onClick={() => {
+                  setIsModalOpen(false);
+                  resetNewProductForm();
+                }}
                 className="px-4 py-2 text-sm border border-slate-200 rounded-lg"
               >
                 Cancel
@@ -751,7 +801,7 @@ export default function InventoryPage() {
         </div>
       )}
 
-      {/* Quantity edit modal */}
+      {/* Quantity adjust modal */}
       {isQtyModalOpen && editProduct && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
@@ -765,11 +815,10 @@ export default function InventoryPage() {
             <div className="space-y-3">
               <div>
                 <label className="block text-sm text-slate-600 mb-1">
-                  Change (+ to add, − to remove) *
+                  Quantity change (+ to add, − to remove)
                 </label>
                 <input
                   type="number"
-                  step="1"
                   value={qtyDelta}
                   onChange={(e) => setQtyDelta(e.target.value)}
                   className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
@@ -777,9 +826,7 @@ export default function InventoryPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm text-slate-600 mb-1">
-                  Reason
-                </label>
+                <label className="block text-sm text-slate-600 mb-1">Reason</label>
                 <input
                   value={qtyReason}
                   onChange={(e) => setQtyReason(e.target.value)}
