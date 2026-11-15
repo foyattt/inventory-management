@@ -9,6 +9,12 @@ const router = express.Router();
 
 router.use(authenticate);
 
+router.get(
+  '/next-numbers',
+  authorize('ADMIN', 'ACCOUNTANT', 'MANAGER'),
+  posController.getNextNumbers
+);
+
 router.post(
   '/transactions',
   authorize('ADMIN', 'ACCOUNTANT', 'MANAGER'),

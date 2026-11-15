@@ -20,28 +20,60 @@ class StockMovementService {
     const qty = toQtyString(quantity);
 
     const movement = await prisma.$transaction(async (tx) => {
-      if (stockSourceId) {
-        const source = await tx.$queryRaw`
-          SELECT "id", "currentBalance"
-          FROM "stock_sources"
-          WHERE "id" = ${stockSourceId}
-          FOR UPDATE
-        `;
-        if (!source.length) {
-          throw new AppError('Stock source not found', 404);
-        }
+      let resolvedSourceId = stockSourceId || null;
 
+      if (!resolvedSourceId) {
+        // Auto-pick first source with balance (FIFO) for negative, or any source / create for positive
+        const sources = await tx.stockSource.findMany({
+          where: { productId },
+          orderBy: { receiptDate: 'asc' },
+        });
         if (d(quantity).lt(0)) {
-          await decrementStockBalance(tx, stockSourceId, d(quantity).abs());
+          const withBalance = sources.find((s) => d(s.currentBalance).gt(0));
+          if (!withBalance) {
+            throw new AppError('No stock source with available balance to decrease', 400);
+          }
+          resolvedSourceId = withBalance.id;
+        } else if (sources.length > 0) {
+          resolvedSourceId = sources[0].id;
         } else {
-          await incrementStockBalance(tx, stockSourceId, quantity);
+          // Create a local adjustment batch when none exists
+          const created = await tx.stockSource.create({
+            data: {
+              productId,
+              sourceType: 'LOCAL',
+              batchCode: `ADJ-${Date.now()}`,
+              receiptDate: new Date(),
+              receivedQty: '0',
+              currentBalance: '0',
+              unitCost: null,
+              notes: 'Auto-created for adjustment',
+            },
+          });
+          resolvedSourceId = created.id;
         }
+      }
+
+      const source = await tx.$queryRaw`
+        SELECT "id", "currentBalance"
+        FROM "stock_sources"
+        WHERE "id" = ${resolvedSourceId}
+        FOR UPDATE
+      `;
+      if (!source.length) {
+        throw new AppError('Stock source not found', 404);
+      }
+
+      if (d(quantity).lt(0)) {
+        await decrementStockBalance(tx, resolvedSourceId, d(quantity).abs());
+      } else {
+        await incrementStockBalance(tx, resolvedSourceId, quantity);
       }
 
       return tx.stockMovement.create({
         data: {
           productId,
-          stockSourceId: stockSourceId || null,
+          stockSourceId: resolvedSourceId,
           movementType: 'ADJUSTMENT',
           quantity: qty,
           referenceType: 'MANUAL_ADJUSTMENT',
