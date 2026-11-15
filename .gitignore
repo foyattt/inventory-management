@@ -9,6 +9,7 @@ build/
 # Environment variables
 .env
 .env.local
+.vite-env.d.ts
 
 # OS files
 .DS_Store
